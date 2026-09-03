@@ -528,6 +528,7 @@ class SettingsConstants:
     SETTING__PASSPORT_BACKUP = "passport_backup"
     SETTING__TAPSIGNER_BACKUP = "tapsigner_backup"
     SETTING__MESSAGE_SIGNING = "message_signing"
+    SETTING__SILENT_PAYMENTS = "silent_payments"
     SETTING__PRIVACY_WARNINGS = "privacy_warnings"
     SETTING__DIRE_WARNINGS = "dire_warnings"
     SETTING__QR_BRIGHTNESS_TIPS = "qr_brightness_tips"
@@ -1163,6 +1164,16 @@ class SettingsDefinition:
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__MESSAGE_SIGNING,
                       display_name=_mft("Message signing"),
+                      visibility=SettingsConstants.VISIBILITY__ADVANCED,
+                      default_value=SettingsConstants.OPTION__DISABLED),
+
+        # BIP-352. Off by default: no released wallet can spend from a hardware
+        # signer this way yet, so it is an experiment the owner opts into rather
+        # than a menu entry everybody has to scroll past.
+        SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
+                      attr_name=SettingsConstants.SETTING__SILENT_PAYMENTS,
+                      abbreviated_name="silentpay",
+                      display_name=_mft("Silent payments"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__DISABLED),
 

@@ -32,6 +32,7 @@ from seedsigner.helpers.passport_backup import (
     PassportBackupError,
     decode_passport_backup,
 )
+from seedsigner.helpers import silent_payments
 from seedsigner.helpers.tapsigner_backup import (
     TapsignerBackupError,
     decode_tapsigner_backup,
@@ -2040,6 +2041,7 @@ class SeedOptionsView(View):
     EXPORT_XPUB = ButtonOption("Export xpub")
     EXPLORER = ButtonOption("Address explorer")
     SIGN_MESSAGE = ButtonOption("Sign message")
+    SILENT_PAYMENTS = ButtonOption("Silent payments")
     BACKUP = ButtonOption("Backup seed", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BIP85_CHILD_SEED = ButtonOption("BIP-85 child seed")
     DISCARD = ButtonOption("Discard seed", button_label_color="red")
@@ -2091,6 +2093,9 @@ class SeedOptionsView(View):
         if self.settings.get_value(SettingsConstants.SETTING__MESSAGE_SIGNING) == SettingsConstants.OPTION__ENABLED:
             button_data.append(self.SIGN_MESSAGE)
 
+        if self.settings.get_value(SettingsConstants.SETTING__SILENT_PAYMENTS) == SettingsConstants.OPTION__ENABLED:
+            button_data.append(self.SILENT_PAYMENTS)
+
         if self.settings.get_value(SettingsConstants.SETTING__BIP85_CHILD_SEEDS) == SettingsConstants.OPTION__ENABLED and self.seed.bip85_supported:
             button_data.append(self.BIP85_CHILD_SEED)
 
@@ -2126,6 +2131,9 @@ class SeedOptionsView(View):
 
         elif button_data[selected_menu_num] == self.BACKUP:
             return Destination(SeedBackupView, view_args=dict(seed=self.seed))
+
+        elif button_data[selected_menu_num] == self.SILENT_PAYMENTS:
+            return Destination(SeedSilentPaymentsOptionsView, view_args=dict(seed=self.seed))
 
         elif button_data[selected_menu_num] == self.BIP85_CHILD_SEED:
             return Destination(SeedBIP85SelectNumWordsView, view_args={"seed": self.seed})
@@ -5301,3 +5309,195 @@ class SaveToSeedkeeperView(View):
                 show_back_button=True,
             )
             return Destination(BackStackView)
+
+
+"""****************************************************************************
+    Silent payments (BIP-352)
+****************************************************************************"""
+class SeedSilentPaymentsOptionsView(View):
+    """Two things a signer can usefully do with a BIP-352 seed today.
+
+    Both are receive-side. Spending arrives separately, because a coordinator has
+    to hand the device the per-output tweak before it can sign.
+    """
+    CONNECT_SPARROW = ButtonOption("Connect to Sparrow")
+    SHOW_ADDRESS = ButtonOption("Show address")
+
+
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+
+    def run(self):
+        button_data = [self.CONNECT_SPARROW, self.SHOW_ADDRESS]
+
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Silent Payments"),
+            button_data=button_data,
+            is_button_text_centered=False,
+            is_bottom_list=True,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        if button_data[selected_menu_num] == self.CONNECT_SPARROW:
+            return Destination(SeedSilentPaymentsConnectWarningView, view_args=dict(seed=self.seed))
+
+        elif button_data[selected_menu_num] == self.SHOW_ADDRESS:
+            return Destination(SeedSilentPaymentsAddressView, view_args=dict(seed=self.seed))
+
+
+
+class SeedSilentPaymentsConnectWarningView(View):
+    """The scan key is about to leave the device. Say so before it does.
+
+    This is a bigger disclosure than exporting an xpub. An xpub lets a watcher
+    derive your addresses; a silent payment scan key lets them detect every
+    payment you will ever receive, from anyone, for as long as this seed lives.
+    It still cannot spend, which is the one reassurance worth giving.
+    """
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+
+    def run(self):
+        destination = Destination(
+            SeedSilentPaymentsConnectAddressView,
+            view_args=dict(seed=self.seed),
+            skip_current_view=True,
+        )
+
+        if self.settings.get_value(SettingsConstants.SETTING__PRIVACY_WARNINGS) == SettingsConstants.OPTION__DISABLED:
+            return destination
+
+        selected_menu_num = self.run_screen(
+            WarningScreen,
+            status_headline=_("Privacy Leak!"),
+            text=_("Sparrow and its server will see every payment you receive. They cannot spend."),
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        return destination
+
+
+
+class SeedSilentPaymentsConnectAddressView(View):
+    """Show the payment address BEFORE handing over the scan key.
+
+    The QR on the next screen is the scan key, which is not human-checkable and
+    must never be displayed as text. Showing the address here gives the user
+    something they can compare against what Sparrow reports after importing, so
+    a wrong seed is caught by them rather than discovered by a missing payment.
+    """
+    SCAN_IN_SPARROW = ButtonOption("Scan in Sparrow")
+
+
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+        self.payment_address = silent_payments.payment_address(
+            self.seed.seed_bytes,
+            self.settings.get_value(SettingsConstants.SETTING__NETWORK),
+        )
+
+
+    def run(self):
+        selected_menu_num = self.run_screen(
+            seed_screens.SeedSilentPaymentAddressScreen,
+            title=_("Check in Sparrow"),
+            payment_address=self.payment_address,
+            button_data=[self.SCAN_IN_SPARROW],
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        return Destination(SeedSilentPaymentsConnectQRView, view_args=dict(seed=self.seed))
+
+
+
+class SeedSilentPaymentsConnectQRView(View):
+    """The scan key, as the key expression a coordinator imports."""
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+        network = self.settings.get_value(SettingsConstants.SETTING__NETWORK)
+        self.descriptor = silent_payments.scan_key_descriptor(
+            self.seed.seed_bytes,
+            network,
+            self.seed.get_fingerprint(network),
+        )
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=GenericStaticQrEncoder(data=self.descriptor),
+        )
+
+        return Destination(
+            SeedSilentPaymentsOptionsView,
+            view_args=dict(seed=self.seed),
+            clear_history=True,
+        )
+
+
+
+class SeedSilentPaymentsAddressView(View):
+    """The public address, to read out or hand to a payer."""
+    SHOW_QR = ButtonOption("Show QR")
+
+
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+        self.payment_address = silent_payments.payment_address(
+            self.seed.seed_bytes,
+            self.settings.get_value(SettingsConstants.SETTING__NETWORK),
+        )
+
+
+    def run(self):
+        selected_menu_num = self.run_screen(
+            seed_screens.SeedSilentPaymentAddressScreen,
+            payment_address=self.payment_address,
+            button_data=[self.SHOW_QR],
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        return Destination(SeedSilentPaymentsAddressQRView, view_args=dict(seed=self.seed))
+
+
+
+class SeedSilentPaymentsAddressQRView(View):
+    """The payment address as a QR. Public; safe to photograph."""
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+        self.payment_address = silent_payments.payment_address(
+            self.seed.seed_bytes,
+            self.settings.get_value(SettingsConstants.SETTING__NETWORK),
+        )
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=GenericStaticQrEncoder(data=self.payment_address),
+        )
+
+        return Destination(
+            SeedSilentPaymentsOptionsView,
+            view_args=dict(seed=self.seed),
+            clear_history=True,
+        )

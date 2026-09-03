@@ -2524,3 +2524,29 @@ class SeedTranscribeEncryptedQRZoomedInScreen(BaseScreen):
                 cur_x = next_x
                 cur_y = next_y
 
+
+
+@dataclass
+class SeedSilentPaymentAddressScreen(ButtonListScreen):
+    """A BIP-352 payment address, formatted the way every other address is.
+
+    Reuses FormattedAddress rather than printing the raw string: an `sp1…` is
+    about 116 characters, three times a native segwit address, and the grouped
+    first-7 / last-7 layout is what makes it checkable against another screen by
+    eye. Checking it by eye is the only defence a user has here, because a silent
+    payment address never appears on chain, so there is nothing to compare it to
+    afterwards.
+    """
+    title: str = None
+    payment_address: str = None
+
+    def __post_init__(self):
+        self.title = self.title or _("Silent Payments")
+        self.is_bottom_list = True
+        super().__post_init__()
+
+        self.components.append(FormattedAddress(
+            address=self.payment_address,
+            font_size=GUIConstants.get_body_font_size(),
+            screen_y=self.top_nav.height,
+        ))
