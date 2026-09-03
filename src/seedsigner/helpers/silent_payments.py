@@ -25,12 +25,35 @@ maintained in parallel.
 """
 
 from embit import bip32
-from embit.descriptor.sp import SPScanKey
 from embit.networks import NETWORKS
-from embit.silent_payments import generate_silent_payment_address
 
 from seedsigner.helpers.embit_utils import get_embit_network_name
 from seedsigner.models.settings_definition import SettingsConstants
+
+
+def is_available() -> bool:
+    """Whether the installed embit can do BIP-352 at all.
+
+    Silent payments live in an embit branch, not in a release, and the device
+    image pins its own embit through a Buildroot package rather than through
+    requirements.txt. Those two can disagree. When they do, the honest outcome
+    is a signing device that boots without a Silent payments menu -- never one
+    that refuses to start because an optional feature's dependency is missing.
+    The same reasoning guards the boot game in seedsigner-os.
+    """
+    try:
+        _sp_imports()
+    except ImportError:
+        return False
+    return True
+
+
+def _sp_imports():
+    """The embit pieces BIP-352 needs, imported late and never at module scope."""
+    from embit.descriptor.sp import SPScanKey
+    from embit.silent_payments import generate_silent_payment_address
+
+    return SPScanKey, generate_silent_payment_address
 
 
 # BIP-352 purpose, and the SLIP-44 coin types for the two chains that matter.
@@ -60,6 +83,7 @@ def derive_keys(seed_bytes: bytes, network: str):
 
 def payment_address(seed_bytes: bytes, network: str) -> str:
     """The public `sp1…` / `tsp1…` string. Safe to show, print and scan."""
+    _, generate_silent_payment_address = _sp_imports()
     scan, spend = derive_keys(seed_bytes, network)
     return generate_silent_payment_address(
         scan, spend.get_public_key(), network=get_embit_network_name(network)
@@ -74,6 +98,7 @@ def scan_key(seed_bytes: bytes, network: str) -> str:
     stopped without moving to a new seed. Treat it like an xpub, only worse:
     an xpub leaks addresses, this leaks the ability to detect every payment.
     """
+    SPScanKey, _ = _sp_imports()
     scan, spend = derive_keys(seed_bytes, network)
     return SPScanKey(
         scan, spend.get_public_key(), network=get_embit_network_name(network)

@@ -22,6 +22,16 @@ from seedsigner.models.seed import Seed
 from seedsigner.models.settings_definition import SettingsConstants
 
 
+# Silent payments live in an embit branch, not a release, and the device image
+# pins embit through Buildroot rather than requirements.txt. Skip rather than
+# fail when the installed embit predates BIP-352, so "this embit is too old" is
+# never mistaken for "silent payments are broken".
+pytestmark = pytest.mark.skipif(
+    not silent_payments.is_available(),
+    reason="installed embit has no BIP-352 support (needs embit#145)",
+)
+
+
 # Published on SeedSigner#769. No coins.
 VECTORS = [
     dict(

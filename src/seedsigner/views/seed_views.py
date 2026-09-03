@@ -2093,7 +2093,12 @@ class SeedOptionsView(View):
         if self.settings.get_value(SettingsConstants.SETTING__MESSAGE_SIGNING) == SettingsConstants.OPTION__ENABLED:
             button_data.append(self.SIGN_MESSAGE)
 
-        if self.settings.get_value(SettingsConstants.SETTING__SILENT_PAYMENTS) == SettingsConstants.OPTION__ENABLED:
+        # `is_available()` as well as the setting: the device image pins embit
+        # through a Buildroot package, not requirements.txt, so an image can ship
+        # an embit with no BIP-352 support. Offering a menu entry that could only
+        # raise is worse than not offering it.
+        if (self.settings.get_value(SettingsConstants.SETTING__SILENT_PAYMENTS) == SettingsConstants.OPTION__ENABLED
+                and silent_payments.is_available()):
             button_data.append(self.SILENT_PAYMENTS)
 
         if self.settings.get_value(SettingsConstants.SETTING__BIP85_CHILD_SEEDS) == SettingsConstants.OPTION__ENABLED and self.seed.bip85_supported:
