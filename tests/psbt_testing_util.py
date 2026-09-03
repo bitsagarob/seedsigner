@@ -122,7 +122,12 @@ def create_output(output_hex: str, value: int = None) -> OutputScope:
 
     Optionally override the output's `value`.
     """
-    output = OutputScope.read_from(BytesIO(unhexlify(output_hex)))
+    # These fixtures are PSBTv2 output scopes: they carry PSBT_OUT_AMOUNT (0x03)
+    # and PSBT_OUT_SCRIPT (0x04). embit 0.8.0 had no PSBTv2 support and quietly
+    # filed both under `unknown`, so reading them without a version happened to
+    # work. An embit that does understand BIP-370 correctly refuses a v2-only
+    # field unless told the scope is v2, so say so.
+    output = OutputScope.read_from(BytesIO(unhexlify(output_hex)), version=2)
     if value is not None:
         output.value = value
     return output

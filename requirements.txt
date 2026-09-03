@@ -1,4 +1,8 @@
-embit==0.8.0
+# BIP-352 silent payments. notTanveer's embit#145 branch, pinned to a commit rather
+# than to the branch name so a force-push upstream cannot silently change what we
+# build. Same fork-by-URL pattern as the pgpy pin below. Drop back to the PyPI
+# release the day silent payments land in embit proper.
+embit @ https://github.com/notTanveer/embit/archive/533cd850f5f4d4f52c21dc1abae18133d98e394e.zip  # 0.8.1 + embit#145 silent payments
 Pillow>=10.4.0
 pyzbar @ https://github.com/seedsigner/pyzbar/archive/c3c237821c6a20b17953efe59b90df0b514a1c03.zip
 qrcode==7.3.1
