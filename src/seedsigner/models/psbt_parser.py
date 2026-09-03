@@ -1542,7 +1542,26 @@ class PSBTParser():
             for public_key, (leaf_hashes, derivation_path_obj) in input.taproot_bip32_derivations.items():
                 if check_fingerprint_match(public_key, derivation_path_obj):
                     return True
-        
+
+            # Check BIP-376 silent payment spend derivations.
+            #
+            # A silent payment output is a taproot output, but its key is derived
+            # rather than a path this seed knows, so the coordinator puts the
+            # spend key's origin in PSBT_IN_SP_SPEND_BIP32_DERIVATION instead of
+            # the taproot field above. Without this, a PSBT the wallet can
+            # perfectly well sign looks like it belongs to somebody else, and the
+            # user is told to pick a different seed.
+            #
+            # getattr, because only SilentPaymentsPSBT inputs carry the field and
+            # an ordinary PSBT must not start raising here.
+            for public_key_bytes, derivation_path_obj in getattr(input, "sp_spend_bip32_derivations", {}).items():
+                try:
+                    public_key = PublicKey.parse(public_key_bytes)
+                except Exception:
+                    continue
+                if check_fingerprint_match(public_key, derivation_path_obj):
+                    return True
+
         return False
 
 

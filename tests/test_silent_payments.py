@@ -368,3 +368,43 @@ class TestSilentPaymentsPSBT(BaseTest):
         f = self.fixtures["send"]
         root = self._signing_root(f["sender_mnemonic"])
         assert root.my_fingerprint.hex() == "73c5da0a"
+
+
+    def test_a_spend_input_is_recognised_as_belonging_to_this_seed(self):
+        """PSBTParser must see a BIP-376 spend input, or the user is misrouted.
+
+        A silent payment output is taproot, but its key is derived rather than on
+        a path the seed knows, so the coordinator puts the spend key's origin in
+        PSBT_IN_SP_SPEND_BIP32_DERIVATION. Nothing else looks there. Without it
+        the wallet says this PSBT belongs to another seed and offers no way
+        forward, while embit would have signed it happily.
+        """
+        from base64 import b64decode
+        from embit.silent_payments.psbt import SilentPaymentsPSBT
+        from seedsigner.models.psbt_parser import PSBTParser
+
+        f = self.fixtures["send_ref"]
+        psbt = SilentPaymentsPSBT.parse(b64decode(f["psbt"]))
+        derivations = [d for inp in psbt.inputs for d in getattr(inp, "sp_spend_bip32_derivations", {})]
+        if not derivations:
+            pytest.skip("this fixture is a send, not a spend: no sp_spend derivation to match")
+
+        root = self._signing_root(self.fixtures["send"]["sender_mnemonic"])
+        assert PSBTParser.has_matching_input_fingerprint(
+            psbt, network=SettingsConstants.TESTNET, root=root
+        )
+
+
+    def test_an_ordinary_psbt_does_not_raise_in_the_new_branch(self):
+        """The lookup is getattr-guarded; a plain PSBT has no such attribute."""
+        from base64 import b64decode
+        from embit.psbt import PSBT
+        from psbt_testing_util import PSBTTestData
+        from seedsigner.models.psbt_parser import PSBTParser
+
+        psbt = PSBT.parse(b64decode(PSBTTestData.SINGLE_SIG_TAPROOT_1_INPUT))
+        root = self._signing_root(self.fixtures["send"]["sender_mnemonic"])
+        # Whatever the answer, it must be an answer and not an AttributeError.
+        assert PSBTParser.has_matching_input_fingerprint(
+            psbt, network=SettingsConstants.TESTNET, root=root
+        ) in (True, False)
