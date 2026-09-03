@@ -202,3 +202,159 @@ class TestSilentPaymentsFlows(FlowTest):
         assert address_view.payment_address.startswith(("sp1", "tsp1"))
         assert silent_payments.scan_key(seed.seed_bytes, network) in qr_view.descriptor
         assert address_view.payment_address not in qr_view.descriptor
+
+
+class TestSilentPaymentsPSBT(BaseTest):
+    """BIP-375 sends, checked against transactions that are actually on a chain.
+
+    The fixtures in tests/data/silent_payments_psbts.json were recorded from real
+    Bitsaga Signet transactions, so a regression here means the device would now
+    produce something different from bytes a node already accepted.
+    """
+
+    @classmethod
+    def setup_class(cls):
+        # BaseTest.setup_class builds the mocked hardware every test needs, so
+        # extend it rather than replacing it.
+        super().setup_class()
+        import json
+        from pathlib import Path
+        cls.fixtures = json.loads(
+            (Path(__file__).parent / "data" / "silent_payments_psbts.json").read_text()
+        )
+
+
+    def setup_method(self):
+        super().setup_method()
+        self.settings.set_value(SettingsConstants.SETTING__SILENT_PAYMENTS, SettingsConstants.OPTION__ENABLED)
+
+
+    def _signing_root(self, mnemonic, network=SettingsConstants.TESTNET):
+        from embit import bip32, bip39
+        from embit.networks import NETWORKS
+        from seedsigner.helpers.embit_utils import get_embit_network_name
+        return bip32.HDKey.from_seed(
+            bip39.mnemonic_to_seed(mnemonic),
+            version=NETWORKS[get_embit_network_name(network)]["xprv"],
+        )
+
+
+    def test_stock_psbt_cannot_even_parse_a_send(self):
+        """Why the hook exists at all: PSBTv2 has no PSBT_OUT_SCRIPT to find."""
+        from base64 import b64decode
+        from embit.psbt import PSBT
+        import pytest as _pytest
+
+        raw = b64decode(self.fixtures["send"]["unsigned_psbt"])
+        with _pytest.raises(Exception):
+            PSBT.parse(raw)
+
+
+    def test_decode_qr_routes_a_send_to_the_silent_payments_parser(self):
+        from base64 import b64decode
+        from embit.silent_payments.psbt import SilentPaymentsPSBT
+        from seedsigner.models.decode_qr import DecodeQR
+
+        raw = b64decode(self.fixtures["send"]["unsigned_psbt"])
+        parsed = DecodeQR._parse_silent_payments_psbt(raw)
+        assert isinstance(parsed, SilentPaymentsPSBT)
+        assert parsed.has_sp_outputs
+
+
+    @pytest.mark.parametrize("fixture_name", [
+        "SINGLE_SIG_NATIVE_SEGWIT_1_INPUT",
+        "SINGLE_SIG_NESTED_SEGWIT_1_INPUT",
+        "SINGLE_SIG_TAPROOT_1_INPUT",
+    ])
+    def test_an_ordinary_psbt_is_left_to_the_stock_parser(self, fixture_name):
+        """The hook must not take over every transaction, only silent payments.
+
+        Taproot matters most here: an SP spend is a taproot input too, so a hook
+        that keyed off script type alone would swallow every ordinary taproot
+        transaction on the device.
+        """
+        from base64 import b64decode
+        from seedsigner.models.decode_qr import DecodeQR
+        from psbt_testing_util import PSBTTestData
+
+        raw = b64decode(getattr(PSBTTestData, fixture_name))
+        assert DecodeQR._parse_silent_payments_psbt(raw) is None
+
+
+    def test_the_hook_is_inert_when_the_setting_is_off(self):
+        from base64 import b64decode
+        from seedsigner.models.decode_qr import DecodeQR
+
+        self.settings.set_value(SettingsConstants.SETTING__SILENT_PAYMENTS, SettingsConstants.OPTION__DISABLED)
+        raw = b64decode(self.fixtures["send"]["unsigned_psbt"])
+        assert DecodeQR._parse_silent_payments_psbt(raw) is None
+
+
+    def test_signing_a_send_reproduces_the_transaction_that_confirmed_on_chain(self):
+        """The signature and the derived output must match the recorded bytes.
+
+        The DLEQ proof deliberately carries fresh randomness on every signature,
+        so the serialised PSBTs differ by exactly those 64 bytes and no others.
+        That is asserted rather than tolerated, so a change anywhere ELSE in the
+        signed PSBT still fails.
+        """
+        from base64 import b64decode
+        from embit.silent_payments.psbt import SilentPaymentsPSBT
+
+        f = self.fixtures["send"]
+        root = self._signing_root(f["sender_mnemonic"])
+
+        parsed = SilentPaymentsPSBT.parse(b64decode(f["unsigned_psbt"]))
+        assert parsed.sign_with(root) == 1
+
+        recorded = SilentPaymentsPSBT.parse(b64decode(f["signed_psbt"]))
+
+        # the signature that authorised the spend
+        assert parsed.inputs[0].taproot_key_sig == recorded.inputs[0].taproot_key_sig
+        # the ECDH shares the receiver scans with (global in BIP-375, not per-input)
+        assert parsed.sp_ecdh_shares == recorded.sp_ecdh_shares
+        assert parsed.sp_ecdh_shares, "a send with no ECDH share would be unscannable"
+        # the DLEQ proof is the one thing that legitimately differs
+        assert parsed.sp_dleq_proofs.keys() == recorded.sp_dleq_proofs.keys()
+        assert parsed.sp_dleq_proofs != recorded.sp_dleq_proofs
+        # and, crucially, where the money went
+        for got, want in zip(parsed.outputs, recorded.outputs):
+            assert got.script_pubkey == want.script_pubkey
+
+        # Everything except the DLEQ proof must be byte-identical. Copying the
+        # recorded proof across and demanding exact equality is the precise
+        # statement; counting differing bytes is not, because two random 64-byte
+        # proofs share a byte about a fifth of the time.
+        parsed.sp_dleq_proofs = dict(recorded.sp_dleq_proofs)
+        assert parsed.serialize() == recorded.serialize()
+
+
+    def test_the_dleq_proof_is_the_only_thing_that_moves_between_runs(self):
+        """Pins the claim the test above relies on, rather than assuming it."""
+        from base64 import b64decode
+        from embit.silent_payments.psbt import SilentPaymentsPSBT
+
+        f = self.fixtures["send"]
+        root = self._signing_root(f["sender_mnemonic"])
+
+        signed = []
+        for _ in range(2):
+            p = SilentPaymentsPSBT.parse(b64decode(f["unsigned_psbt"]))
+            p.sign_with(root)
+            signed.append(p)
+
+        # The proofs themselves differ every time...
+        assert signed[0].sp_dleq_proofs != signed[1].sp_dleq_proofs
+        assert signed[0].sp_dleq_proofs.keys() == signed[1].sp_dleq_proofs.keys()
+        for proof in signed[0].sp_dleq_proofs.values():
+            assert len(proof) == 64
+
+        # ...and nothing else does.
+        signed[0].sp_dleq_proofs = dict(signed[1].sp_dleq_proofs)
+        assert signed[0].serialize() == signed[1].serialize()
+
+
+    def test_the_sender_seed_is_the_one_that_signed_on_chain(self):
+        f = self.fixtures["send"]
+        root = self._signing_root(f["sender_mnemonic"])
+        assert root.my_fingerprint.hex() == "73c5da0a"

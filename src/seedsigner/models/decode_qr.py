@@ -260,10 +260,57 @@ class DecodeQR:
         if self.complete:
             data = self.get_data_psbt()
             if data != None:
+                sp_psbt = self._parse_silent_payments_psbt(data)
+                if sp_psbt is not None:
+                    return sp_psbt
                 try:
                     return psbt.PSBT.parse(data)
                 except:
                     return None
+        return None
+
+
+    @staticmethod
+    def _parse_silent_payments_psbt(data):
+        """A BIP-352 PSBT, or None if this is an ordinary one.
+
+        BIP-375 silent payment sends and BIP-376 spends are PSBTv2 and carry
+        fields stock `PSBT` refuses outright: a v2 output has no
+        PSBT_OUT_SCRIPT for the stock parser to find, so `PSBT.parse` raises
+        and the device would simply report an unreadable QR.
+
+        `SilentPaymentsPSBT` understands both, and its `sign_with()` already
+        does the whole job -- deriving the send outputs, then signing spend
+        inputs with `(b_spend + tweak)` rather than a BIP-341 TapTweak. So this
+        is the only hook the feature needs; nothing downstream changes.
+
+        Gated on the setting, so a device with silent payments switched off
+        parses exactly what it always did.
+        """
+        from seedsigner.models.settings import Settings
+
+        if Settings.get_instance().get_value(
+            SettingsConstants.SETTING__SILENT_PAYMENTS
+        ) != SettingsConstants.OPTION__ENABLED:
+            return None
+
+        try:
+            from embit.silent_payments.psbt import SilentPaymentsPSBT
+        except ImportError:
+            # embit without silent payments support. Fall through to stock.
+            return None
+
+        try:
+            parsed = SilentPaymentsPSBT.parse(data)
+        except Exception:
+            return None
+
+        # Only claim it when it really is one. An ordinary PSBT parses here too,
+        # and handing back the subclass for those would change behaviour for
+        # every transaction rather than only for silent payments.
+        has_spend = any(inp.sp_tweak is not None for inp in parsed.inputs)
+        if parsed.has_sp_outputs or has_spend:
+            return parsed
         return None
 
 
