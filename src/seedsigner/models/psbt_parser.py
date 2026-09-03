@@ -1296,6 +1296,13 @@ class PSBTParser():
                 trimmed_psbt.inputs[i].final_scriptwitness = inp.final_scriptwitness
             else:
                 trimmed_psbt.inputs[i].partial_sigs = inp.partial_sigs
+                # A taproot key-path signature lives in PSBT_IN_TAP_KEY_SIG and
+                # not in partial_sigs, so without this the trimmed PSBT loses the
+                # only signature it had. BIP-352 spends are signed exactly this
+                # way: embit fills taproot_key_sig and leaves finalisation to the
+                # coordinator, which is what BIP-174 expects a signer to do.
+                if getattr(inp, "taproot_key_sig", None) is not None:
+                    trimmed_psbt.inputs[i].taproot_key_sig = inp.taproot_key_sig
 
         return trimmed_psbt
 
@@ -1306,6 +1313,12 @@ class PSBTParser():
         for i, inp in enumerate(tx.inputs):
             if inp.final_scriptwitness is not None:
                 # Taproot sign
+                cnt += 1
+            elif getattr(inp, "taproot_key_sig", None) is not None:
+                # A taproot key-path signature, not yet finalised into a witness.
+                # This is what a BIP-352 spend produces, and counting it is what
+                # tells the caller a signature was actually added; without it the
+                # wallet signs correctly and then reports that it signed nothing.
                 cnt += 1
             else:
                 cnt += len(list(inp.partial_sigs.keys()))
