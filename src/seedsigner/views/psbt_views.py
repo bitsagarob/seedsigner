@@ -1514,8 +1514,7 @@ class PSBTMusig2RoundView(View):
         steps = 3 if musig2_sp.scan_keys(psbt) else 2
         if progress.stage == musig2_session.SHARES:
             headline = _("Step 1 of 3")
-            text = _("Not signed yet. This pays a silent payment address, so the "
-                     "recipient's output is worked out from every signer's share "
+            text = _("Not signed yet. Every signer's share builds the output "
                      "first. Send this back, then scan it again.")
         elif progress.stage == musig2_session.ROUND_ONE:
             headline = _("Step {n} of {steps}").format(n=steps - 1, steps=steps)
