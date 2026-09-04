@@ -1450,11 +1450,10 @@ class PSBTFinalizeView(View):
 class PSBTMusig2RoundView(View):
     """One MuSig2 round, on whichever round the transaction is ready for.
 
-    Signing is two passes and the device cannot shorten that. The first
-    publishes a public nonce and produces no signature at all, which is a normal
-    outcome and has to look like one: a screen that says "signed" after round one
-    would be a lie, and one that says "failed" would send the user round again
-    for no reason.
+    Signing is two passes and the device cannot shorten that. The first pass
+    produces no signature at all, which is a normal outcome and has to look like
+    one: a screen that says "signed" after it would be a lie, and one that says
+    "failed" would send the owner round again for no reason.
 
     The secret nonce between the two lives in memory on the Controller and
     nowhere else. Power the device off between rounds and the attempt fails,
@@ -1492,13 +1491,16 @@ class PSBTMusig2RoundView(View):
             progress.skipped_leaves,
         )
 
+        # No "nonce" and no "partial signature". The owner of a 2-of-3 has two
+        # things to act on: nothing is signed yet, and they have to come back
+        # once the others have been. Naming the cryptography instead buries both.
         if progress.stage == musig2_session.ROUND_ONE:
-            headline = _("Round 1 of 2")
-            text = _("Nonce published. Send this back, then scan it again once "
-                     "the other signers have had their turn.")
+            headline = _("Step 1 of 2")
+            text = _("Not signed yet. Send this back, then scan it again once "
+                     "the other signers have taken their turn.")
         else:
-            headline = _("Round 2 of 2")
-            text = _("Signed. Send this back to be combined into one signature.")
+            headline = _("Step 2 of 2")
+            text = _("Signed. Send this back to finish the transaction.")
 
         self.run_screen(
             LargeIconStatusScreen,
