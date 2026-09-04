@@ -221,6 +221,12 @@ def write_partial_sig(psbt, role: Musig2Role, partial_sig: bytes) -> None:
     psbt.inputs[role.input_index].unknown[_field_key(FIELD_PARTIAL_SIG, role)] = partial_sig
 
 
+def has_partial_sig(psbt, role: Musig2Role) -> bool:
+    """Whether this seed has already signed this aggregate on this input."""
+    return _suffix(role, role.my_pubkey) in scope_fields(
+        psbt.inputs[role.input_index], FIELD_PARTIAL_SIG)
+
+
 def pubnonces(psbt, role: Musig2Role) -> Optional[List[bytes]]:
     """Every participant's nonce in aggregation order, or None if one is missing.
 
