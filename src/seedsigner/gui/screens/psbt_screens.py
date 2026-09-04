@@ -629,12 +629,17 @@ class PSBTAddressDetailsScreen(ButtonListScreen):
         next_y = int(GUIConstants.COMPONENT_PADDING/2)
 
         if self.payment_name:
-            # The BIP asks for the name to be shown prefixed with a bitcoin sign, which is also
-            # what stops it reading as an ordinary email address.
+            # BIP-353 says wallets SHOULD prefix the name with a bitcoin sign, to stop it reading
+            # as an ordinary email address. It is omitted here because this device cannot draw it:
+            # of the seven bundled fonts only PlemolJP, the CJK console font, has U+20BF, and
+            # neither the body font nor the fixed-width one does. The prefix rendered as an empty
+            # box, which says less than no prefix at all and looks like a bug in the name. The
+            # screen title and the status line underneath carry the meaning instead. Do not put it
+            # back without checking the font first.
             name = TextArea(
                 image_draw=draw,
                 canvas=center_img,
-                text="\u20bf" + self.payment_name,
+                text=self.payment_name,
                 width=self.canvas_width,
                 screen_y=next_y,
                 font_size=GUIConstants.get_body_font_size(),
