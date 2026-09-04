@@ -75,6 +75,15 @@ def scope_fields(scope, field_type: int) -> Dict[bytes, bytes]:
     return {k[1:]: v for k, v in scope.unknown.items() if k and k[0] == field_type}
 
 
+def has_musig2_fields(psbt) -> bool:
+    """A cheap look for MuSig2 on any input, with nothing that can raise.
+
+    Detection has to happen before the flow commits to a MuSig2 path, and a
+    malformed arrangement should surface on a screen that can explain it rather
+    than while deciding which screen to show."""
+    return any(scope_fields(scope, FIELD_PARTICIPANTS) for scope in psbt.inputs)
+
+
 def _bip32_tweaks(parent_agg: bytes, path: List[int]):
     """Walk BIP-328's synthetic xpub down `path`, collecting the plain tweaks.
 

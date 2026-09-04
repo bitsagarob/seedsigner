@@ -1310,6 +1310,14 @@ class PSBTFinalizeView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
+        # MuSig2 does not produce a signature the counting below can see, and on
+        # the first of its two rounds it does not produce one at all. Branch
+        # before any of that rather than teaching it about a second scheme.
+        if not self.controller.psbt_sign_with_satochip:
+            from seedsigner.helpers import musig2_psbt
+            if musig2_psbt.has_musig2_fields(psbt):
+                return Destination(PSBTMusig2RoundView)
+
         sig_cnt = PSBTParser.sig_count(psbt)
         logger.info(
             "PSBTFinalize: approve selected; signer_mode=%s initial_sig_count=%d inputs=%d",
@@ -1435,6 +1443,71 @@ class PSBTFinalizeView(View):
         logger.info("PSBTFinalize: signatures added; routing=PSBTSignedQRDisplayView")
         self.controller.psbt = trimmed_psbt
         self.controller.psbt_sign_with_satochip = False
+        return Destination(PSBTSignedQRDisplayView)
+
+
+
+class PSBTMusig2RoundView(View):
+    """One MuSig2 round, on whichever round the transaction is ready for.
+
+    Signing is two passes and the device cannot shorten that. The first
+    publishes a public nonce and produces no signature at all, which is a normal
+    outcome and has to look like one: a screen that says "signed" after round one
+    would be a lie, and one that says "failed" would send the user round again
+    for no reason.
+
+    The secret nonce between the two lives in memory on the Controller and
+    nowhere else. Power the device off between rounds and the attempt fails,
+    which is the correct failure rather than a lost key.
+    """
+
+    def run(self):
+        from seedsigner.helpers import musig2_psbt, musig2_session
+
+        psbt = self.controller.psbt
+        psbt_parser: PSBTParser = self.controller.psbt_parser
+
+        session = getattr(self.controller, "musig2_session", None)
+        if session is None:
+            session = musig2_session.Musig2Session()
+            self.controller.musig2_session = session
+
+        try:
+            progress = musig2_session.advance(psbt, psbt_parser.root, session)
+        except musig2_psbt.Musig2Error as e:
+            logger.info("PSBTMusig2Round: refused: %s", e)
+            self.run_screen(
+                WarningScreen,
+                title=_("MuSig2"),
+                status_headline=None,
+                text=str(e),
+                show_back_button=False,
+                button_data=[ButtonOption(_("Done"))],
+            )
+            return Destination(MainMenuView, clear_history=True)
+
+        logger.info(
+            "PSBTMusig2Round: stage=%s signed=%d waiting=%d leaves_skipped=%d",
+            progress.stage, progress.signed_inputs, progress.waiting_inputs,
+            progress.skipped_leaves,
+        )
+
+        if progress.stage == musig2_session.ROUND_ONE:
+            headline = _("Round 1 of 2")
+            text = _("Nonce published. Send this back, then scan it again once "
+                     "the other signers have had their turn.")
+        else:
+            headline = _("Round 2 of 2")
+            text = _("Signed. Send this back to be combined into one signature.")
+
+        self.run_screen(
+            LargeIconStatusScreen,
+            title=_("MuSig2"),
+            status_headline=headline,
+            text=text,
+            show_back_button=False,
+            button_data=[ButtonOption(_("Continue"))],
+        )
         return Destination(PSBTSignedQRDisplayView)
 
 
