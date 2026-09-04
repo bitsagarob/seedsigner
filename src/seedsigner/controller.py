@@ -249,6 +249,19 @@ class Controller(Singleton):
     # such hint. Must be cleared whenever a new psbt is loaded so a value from
     # a previous transaction cannot be applied to this one.
     psbt_source_time: int | None = None
+
+    # Seconds to add to the system clock to get real time, or None when this device has not been
+    # given a date at all. There is no RTC and the kernel has it compiled out, so every boot starts
+    # at a hardcoded date; only a timecode QR scanned by the user changes that, and on hardware
+    # that scan sets the system clock, making the offset exactly zero.
+    #
+    # Deliberately NOT psbt_source_time, which is the mtime of a PSBT file and therefore comes from
+    # the same machine as the PSBT. Letting that machine supply both the proof and the date it is
+    # judged against defeats the check entirely.
+    #
+    # Survives the idle wipe on purpose: a date is not a secret, and quietly forgetting it would
+    # turn verified proofs into unverifiable ones with nothing on screen to explain why.
+    timecode_offset: float | None = None
     sign_message_with_satochip: bool = False
 
     unverified_address = None

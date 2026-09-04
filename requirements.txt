@@ -3,6 +3,12 @@
 # build. Same fork-by-URL pattern as the pgpy pin below. Drop back to the PyPI
 # release the day silent payments land in embit proper.
 embit @ https://github.com/notTanveer/embit/archive/533cd850f5f4d4f52c21dc1abae18133d98e394e.zip  # 0.8.1 + embit#145 silent payments
+# BIP-353 on-device DNSSEC validation. Our fork of alvroble/pydnssec-prover, on a branch
+# adding an optional libcrypto backend for ECDSA. Pinned to a commit for the same reason embit
+# is: there is no release, upstream is a work in progress, and a force-push must not be able to
+# change what we build. MUST MATCH seedsigner-os/opt/external-packages/python-pydnssec-prover,
+# which is what actually ships; build.sh checks that the two agree.
+pydnssec-prover @ https://github.com/bitsagarob/pydnssec-prover/archive/df72b67f5585c4cfae779ca833db3c5c9304f625.zip
 Pillow>=10.4.0
 pyzbar @ https://github.com/seedsigner/pyzbar/archive/c3c237821c6a20b17953efe59b90df0b514a1c03.zip
 qrcode==7.3.1

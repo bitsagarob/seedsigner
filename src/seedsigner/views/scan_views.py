@@ -2,6 +2,7 @@ import logging
 import re
 import time
 import subprocess
+from datetime import timezone
 
 #from embit.descriptor import Descriptor
 
@@ -296,14 +297,25 @@ class ScanView(View):
             elif self.decoder.is_time:
                 dt = self.decoder.get_time()
                 if dt:
+                    # Whatever happens to the system clock, record the date the user just gave the
+                    # device. BIP-353 proof freshness is judged against this and nothing else: a
+                    # SeedSigner has no RTC, so an unscanned device genuinely does not know the
+                    # date and has to say so rather than guess.
+                    scanned_unix = dt.replace(tzinfo=timezone.utc).timestamp()
+
                     if MicroSD.is_desktop_mode():
+                        # The simulator cannot set the host clock and should not try. Carrying the
+                        # difference as an offset instead means the simulator honours the timecode
+                        # it was actually given, so an expired proof looks expired there too. If it
+                        # simply used the host clock, the one path worth testing would be the one
+                        # path that could not be tested.
+                        self.controller.timecode_offset = scanned_unix - time.time()
                         self.run_screen(
-                            WarningScreen,
-                            title="Unavailable",
+                            LargeIconStatusScreen,
+                            title="Success",
                             status_headline=None,
-                            text="Setting the system time is not supported on desktop.",
+                            text=_("Time set to:") + f" {dt.strftime('%Y-%m-%d %H:%M:%S')}",
                             show_back_button=False,
-                            button_data=[ButtonOption("OK")],
                         )
                         return Destination(MainMenuView)
                     try:
@@ -312,6 +324,8 @@ class ScanView(View):
                             "-s",
                             dt.strftime("%Y-%m-%d %H:%M:%S"),
                         ], check=True)
+                        # The system clock now IS the scanned time, so there is nothing to correct.
+                        self.controller.timecode_offset = 0.0
                         # Reset activity-based timers since system time changed
                         self.controller.reset_screensaver_timeout()
                         self.run_screen(

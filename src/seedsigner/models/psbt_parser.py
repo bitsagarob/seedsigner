@@ -222,6 +222,7 @@ class PSBTParser():
         self.can_verify_derivations: bool = False
         self.destination_addresses = []
         self.destination_amounts = []
+        self.destination_payment_names = []
         self.op_return_data: bytes = None
         self.op_return_amount: int = 0
         self.risk_warnings: set[str] = set()
@@ -1006,6 +1007,32 @@ class PSBTParser():
         return PSBTParser._input_commits_to_key(inp, derived)
 
 
+    @staticmethod
+    def _read_payment_name(out):
+        """The BIP-353 material carried by one output, or None.
+
+        Only what is in the PSBT is collected here. The proof is deliberately NOT validated during
+        parsing: validation needs the device's date, and the date can change between parsing a PSBT
+        and reviewing it, since the user may go and scan a timecode QR precisely because the review
+        screen told them to. Verifying here would freeze whichever answer happened to be true first.
+
+        `sp_data` is BIP-375's PSBT_OUT_SP_V0_INFO and is present only on silent payment outputs.
+        It is what the proof gets bound to, so it is carried along rather than looked up later.
+        """
+        from seedsigner.helpers import bip353
+
+        proof = bip353.read_proof(out)
+        if proof is None:
+            return None
+
+        hrn, chain = proof
+        return {
+            "hrn": hrn,
+            "chain": chain,
+            "sp_data": getattr(out, "sp_data", None),
+        }
+
+
     def _parse_outputs(self, child_key_derivation_cache: dict):
         self.spend_amount = 0
         self.change_amount = 0
@@ -1015,6 +1042,7 @@ class PSBTParser():
         self.risk_warnings = set()
         self.destination_addresses = []
         self.destination_amounts = []
+        self.destination_payment_names = []
 
         # Asking the PSBT for its transaction rebuilds that entire transaction from
         # scratch on every single request. The outputs are consulted a dozen times
@@ -1199,6 +1227,7 @@ class PSBTParser():
                     ) from e
                 self.destination_addresses.append(addr)
                 self.destination_amounts.append(vout[i].value)
+                self.destination_payment_names.append(self._read_payment_name(out))
                 self.spend_amount += vout[i].value
 
         self.fee_amount = self.psbt.fee()

@@ -595,8 +595,22 @@ class PSBTMathScreen(ButtonListScreen):
 
 @dataclass
 class PSBTAddressDetailsScreen(ButtonListScreen):
+    """Where this output is going, and, when the PSBT proves one, who owns it.
+
+    A BIP-353 payment name replaces the address rather than sitting beside it, because for a
+    BIP-352 silent payment the address is derived from the recipient's keys and the sender's
+    inputs: it appears on no screen the user has ever seen, in no wallet, and nowhere in the
+    conversation that set up the payment. Reading it back to them checks nothing. The name is the
+    only thing they can recognise, so the name is what gets the space and the emphasis.
+
+    The derived address is still shown, truncated and unemphasised, because it is what actually
+    goes on chain and hiding it entirely would be a different kind of dishonesty.
+    """
     address: str = None
     amount: int = 0
+    payment_name: str = None
+    payment_name_status: str = None
+    payment_name_color: str = GUIConstants.SUCCESS_COLOR
 
     def __post_init__(self):
         # Customize defaults
@@ -611,26 +625,61 @@ class PSBTAddressDetailsScreen(ButtonListScreen):
         center_img = Image.new("RGB", (self.canvas_width, center_img_height), GUIConstants.BACKGROUND_COLOR)
         draw = ImageDraw.Draw(center_img)
 
+        components = []
+        next_y = int(GUIConstants.COMPONENT_PADDING/2)
+
+        if self.payment_name:
+            # The BIP asks for the name to be shown prefixed with a bitcoin sign, which is also
+            # what stops it reading as an ordinary email address.
+            name = TextArea(
+                image_draw=draw,
+                canvas=center_img,
+                text="\u20bf" + self.payment_name,
+                width=self.canvas_width,
+                screen_y=next_y,
+                font_size=GUIConstants.get_body_font_size(),
+                font_color=self.payment_name_color,
+            )
+            components.append(name)
+            next_y = name.screen_y + name.height
+
+            status = TextArea(
+                image_draw=draw,
+                canvas=center_img,
+                text=self.payment_name_status,
+                width=self.canvas_width,
+                screen_y=next_y + int(GUIConstants.COMPONENT_PADDING/2),
+                font_size=GUIConstants.get_body_font_size() - 4,
+                font_color=self.payment_name_color,
+            )
+            components.append(status)
+            next_y = status.screen_y + status.height + GUIConstants.COMPONENT_PADDING
+
         btc_amount = BtcAmount(
             image_draw=draw,
             canvas=center_img,
             total_sats=self.amount,
-            screen_y=int(GUIConstants.COMPONENT_PADDING/2),
+            screen_y=next_y,
         )
+        components.append(btc_amount)
 
         formatted_address = FormattedAddress(
             image_draw=draw,
             canvas=center_img,
             width=self.canvas_width - 2*GUIConstants.EDGE_PADDING,
             screen_x=GUIConstants.EDGE_PADDING,
-            screen_y=btc_amount.height + GUIConstants.COMPONENT_PADDING,
-            font_size=24,
+            screen_y=btc_amount.screen_y + btc_amount.height + GUIConstants.COMPONENT_PADDING,
+            # With a name above it the address is supporting detail, so it is given one truncated
+            # line rather than the two or three full ones it gets when it is all there is.
+            font_size=24 if not self.payment_name else 16,
+            max_lines=None if not self.payment_name else 1,
             address=self.address,
         )
+        components.append(formatted_address)
 
         # Render each to the temp img we passed in
-        btc_amount.render()
-        formatted_address.render()
+        for component in components:
+            component.render()
 
         self.body_img = center_img.crop((
             0,
