@@ -121,17 +121,76 @@ def _bip32_tweaks(parent_agg: bytes, path: List[int]):
     return tweaks, point
 
 
+class Musig2Aggregate(NamedTuple):
+    """One aggregate key on one input, as the PSBT describes it, whoever we are."""
+
+    parent_agg: bytes           # 33 bytes, the KeyAgg output, from the 0x1a key
+    participants: List[bytes]   # 33 bytes each, in aggregation order
+    agg_id: bytes               # 33 bytes, the 0x1b / 0x1c key component
+    leaf_hash: Optional[bytes]  # None for a key path spend
+    tweaks: List[bytes]
+    is_xonly: List[bool]
+
+
+def aggregates_on_input(scope, input_index: int = 0) -> List[Musig2Aggregate]:
+    """Every aggregate key the input's MuSig2 fields describe, with its tweak chain.
+
+    Needs no seed: this is what a verifier that is not a participant, or a
+    participant checking someone else's contribution, reads out of the PSBT."""
+    participants_by_agg = {
+        agg: [blob[i:i + 33] for i in range(0, len(blob), 33)]
+        for agg, blob in scope_fields(scope, FIELD_PARTICIPANTS).items()
+    }
+    aggregates = []
+    for parent_agg, participants in participants_by_agg.items():
+        # BIP-328 makes the aggregate an xpub, so it has a fingerprint of
+        # its own, and the updater files the path under it.
+        agg_fingerprint = hash160(parent_agg)[:4]
+        entry = next(
+            ((leaves, der)
+             for _, (leaves, der) in scope.taproot_bip32_derivations.items()
+             if der.fingerprint == agg_fingerprint),
+            None,
+        )
+        if entry is None:
+            raise Musig2Error(
+                "input %d claims an aggregate key with no derivation for it" % input_index)
+        leaf_hashes, agg_der = entry
+
+        tweaks, derived = _bip32_tweaks(parent_agg, agg_der.derivation)
+        is_xonly = [False] * len(tweaks)
+
+        if leaf_hashes:
+            # A leaf: the key in the script is the derived one, untweaked.
+            leaf_hash = leaf_hashes[0]
+            agg_id = m.cbytes(derived)
+        else:
+            leaf_hash = None
+            merkle_root = scope.taproot_merkle_root or b""
+            taptweak = tagged_hash("TapTweak", m.xbytes(derived) + merkle_root)
+            tweaks = tweaks + [taptweak]
+            is_xonly = is_xonly + [True]
+            tweaked = m.key_agg_and_tweak(participants, tweaks, is_xonly)
+            agg_id = m.cbytes(tweaked.Q)
+
+        aggregates.append(Musig2Aggregate(
+            parent_agg=parent_agg,
+            participants=participants,
+            agg_id=agg_id,
+            leaf_hash=leaf_hash,
+            tweaks=tweaks,
+            is_xonly=is_xonly,
+        ))
+    return aggregates
+
+
 def roles_for_root(psbt, root) -> List[Musig2Role]:
     """Every aggregate key on every input that `root` can sign for."""
     my_fingerprint = root.my_fingerprint
     roles = []
 
     for input_index, scope in enumerate(psbt.inputs):
-        participants_by_agg = {
-            agg: [blob[i:i + 33] for i in range(0, len(blob), 33)]
-            for agg, blob in scope_fields(scope, FIELD_PARTICIPANTS).items()
-        }
-        if not participants_by_agg:
+        if not scope_fields(scope, FIELD_PARTICIPANTS):
             continue
 
         # Our own participant keys on this input, by the path that makes them.
@@ -147,52 +206,21 @@ def roles_for_root(psbt, root) -> List[Musig2Role]:
             if der.fingerprint == my_fingerprint
         }
 
-        for parent_agg, participants in participants_by_agg.items():
-            my_pubkey = next((pk for pk in participants if pk[1:] in mine), None)
+        for agg in aggregates_on_input(scope, input_index):
+            my_pubkey = next((pk for pk in agg.participants if pk[1:] in mine), None)
             if my_pubkey is None:
                 continue
-
-            # BIP-328 makes the aggregate an xpub, so it has a fingerprint of
-            # its own, and the updater files the path under it.
-            agg_fingerprint = hash160(parent_agg)[:4]
-            entry = next(
-                ((leaves, der)
-                 for _, (leaves, der) in scope.taproot_bip32_derivations.items()
-                 if der.fingerprint == agg_fingerprint),
-                None,
-            )
-            if entry is None:
-                raise Musig2Error(
-                    "input %d claims an aggregate key with no derivation for it" % input_index)
-            leaf_hashes, agg_der = entry
-
-            tweaks, derived = _bip32_tweaks(parent_agg, agg_der.derivation)
-            is_xonly = [False] * len(tweaks)
-
-            if leaf_hashes:
-                # A leaf: the key in the script is the derived one, untweaked.
-                leaf_hash = leaf_hashes[0]
-                agg_id = m.cbytes(derived)
-            else:
-                leaf_hash = None
-                merkle_root = scope.taproot_merkle_root or b""
-                taptweak = tagged_hash("TapTweak", m.xbytes(derived) + merkle_root)
-                tweaks = tweaks + [taptweak]
-                is_xonly = is_xonly + [True]
-                tweaked = m.key_agg_and_tweak(participants, tweaks, is_xonly)
-                agg_id = m.cbytes(tweaked.Q)
-
             roles.append(Musig2Role(
                 input_index=input_index,
-                parent_agg=parent_agg,
-                participants=participants,
+                parent_agg=agg.parent_agg,
+                participants=agg.participants,
                 my_pubkey=my_pubkey,
-                my_index=participants.index(my_pubkey),
+                my_index=agg.participants.index(my_pubkey),
                 my_derivation=mine[my_pubkey[1:]],
-                agg_id=agg_id,
-                leaf_hash=leaf_hash,
-                tweaks=tweaks,
-                is_xonly=is_xonly,
+                agg_id=agg.agg_id,
+                leaf_hash=agg.leaf_hash,
+                tweaks=agg.tweaks,
+                is_xonly=agg.is_xonly,
             ))
 
     return roles

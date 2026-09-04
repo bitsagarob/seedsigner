@@ -1,4 +1,4 @@
-"""The two MuSig2 rounds, and the secret nonce that has to live between them.
+"""The MuSig2 rounds, and the secret nonce that has to live between them.
 
 Signing takes two passes. The first publishes a public nonce; the second, once
 every other signer has published theirs, produces the partial signature. The
@@ -21,19 +21,26 @@ attacker never needs to read the file, only to put it back.
 Entries are keyed by the message they were made for, so a secret nonce created
 for one transaction can never be picked up for another. A changed transaction
 simply misses the cache and starts a fresh first round.
+
+A transaction that pays a silent payment address has one round more, before
+either of these: the recipient's output has to be worked out from every signer's
+share before there is a message to sign at all. That round produces no nonce and
+holds no state; see musig2_sp.
 """
 
 from typing import Dict, List, NamedTuple, Tuple
 
 from seedsigner.helpers import musig2 as m
 from seedsigner.helpers import musig2_psbt as mp
+from seedsigner.helpers import musig2_sp
 
+SHARES = "shares"
 ROUND_ONE = "round_one"
 SIGNED = "signed"
 
 
 class Musig2Progress(NamedTuple):
-    stage: str                  # ROUND_ONE or SIGNED
+    stage: str                  # SHARES, ROUND_ONE or SIGNED
     signed_inputs: int
     waiting_inputs: int
     skipped_leaves: int
@@ -43,7 +50,7 @@ class Musig2Session:
     """Secret nonces, keyed by the exact thing they may be used to sign."""
 
     def __init__(self):
-        self._secnonces: Dict[Tuple[int, bytes, bytes], bytearray] = {}
+        self._secnonces: Dict[Tuple[int, bytes, bytes, bytes], bytearray] = {}
 
     def clear(self) -> None:
         for secnonce in self._secnonces.values():
@@ -54,7 +61,10 @@ class Musig2Session:
         return len(self._secnonces)
 
     def _key(self, role: mp.Musig2Role, msg: bytes):
-        return (role.input_index, role.agg_id, msg)
+        # The participant key is part of it: two seeds of one arrangement on
+        # the same device would otherwise share an entry, and the second would
+        # sign with the first one's nonce.
+        return (role.input_index, role.agg_id, role.my_pubkey, msg)
 
     def has(self, role: mp.Musig2Role, msg: bytes) -> bool:
         return self._key(role, msg) in self._secnonces
@@ -77,6 +87,14 @@ class Musig2Session:
         return m.sign(secnonce, secret_key, session)
 
 
+def _secret_for(root, role: mp.Musig2Role) -> bytes:
+    secret_key = root.derive(role.my_derivation).key.secret
+    if m.individual_pk(secret_key) != role.my_pubkey:
+        raise mp.Musig2Error(
+            "input %d: the seed does not make the key the PSBT claims" % role.input_index)
+    return secret_key
+
+
 def advance(psbt, root, session: Musig2Session) -> Musig2Progress:
     """Take whichever round each MuSig2 input is ready for, and write it in.
 
@@ -88,6 +106,23 @@ def advance(psbt, root, session: Musig2Session) -> Musig2Progress:
 
     if not keypath:
         raise mp.Musig2Error("this seed is not a participant in any key-path aggregate")
+
+    paying = musig2_sp.scan_keys(psbt)
+    if paying and musig2_sp.scripts_missing(psbt):
+        # Round zero. No message exists yet, so nothing below can run; hand
+        # over a share for every key we hold and stop there.
+        for role in keypath:
+            mp.verify_against_utxo(psbt, role)
+            secret_key = _secret_for(root, role)
+            for scan_key in paying:
+                if not musig2_sp.has_share(psbt, role, scan_key):
+                    musig2_sp.contribute(psbt, role, secret_key, scan_key)
+        return Musig2Progress(stage=SHARES, signed_inputs=0,
+                              waiting_inputs=len(keypath), skipped_leaves=skipped)
+    if paying:
+        # The one check between a bad share and a signature. Every co-signer's
+        # proof, and the script the coordinator wrote from them.
+        musig2_sp.verify_output_scripts(psbt)
 
     signed = 0
     waiting = 0
@@ -103,10 +138,7 @@ def advance(psbt, root, session: Musig2Session) -> Musig2Progress:
 
         mp.verify_against_utxo(psbt, role)
         msg = mp.sighash_for(psbt, role)
-        secret_key = root.derive(role.my_derivation).key.secret
-        if m.individual_pk(secret_key) != role.my_pubkey:
-            raise mp.Musig2Error(
-                "input %d: the seed does not make the key the PSBT claims" % role.input_index)
+        secret_key = _secret_for(root, role)
 
         if not session.has(role, msg):
             mp.write_pubnonce(psbt, role, session.begin(role, msg, secret_key))

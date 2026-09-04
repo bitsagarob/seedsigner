@@ -1507,12 +1507,22 @@ class PSBTMusig2RoundView(View):
         # No "nonce" and no "partial signature". The owner of a 2-of-3 has two
         # things to act on: nothing is signed yet, and they have to come back
         # once the others have been. Naming the cryptography instead buries both.
-        if progress.stage == musig2_session.ROUND_ONE:
-            headline = _("Step 1 of 2")
+        #
+        # A silent payment adds a step in front: the recipient's output is
+        # worked out from every signer's share before there is anything to sign.
+        from seedsigner.helpers import musig2_sp
+        steps = 3 if musig2_sp.scan_keys(psbt) else 2
+        if progress.stage == musig2_session.SHARES:
+            headline = _("Step 1 of 3")
+            text = _("Not signed yet. This pays a silent payment address, so the "
+                     "recipient's output is worked out from every signer's share "
+                     "first. Send this back, then scan it again.")
+        elif progress.stage == musig2_session.ROUND_ONE:
+            headline = _("Step {n} of {steps}").format(n=steps - 1, steps=steps)
             text = _("Not signed yet. Send this back, then scan it again once "
                      "the other signers have taken their turn.")
         else:
-            headline = _("Step 2 of 2")
+            headline = _("Step {n} of {steps}").format(n=steps, steps=steps)
             text = _("Signed. Send this back to finish the transaction.")
 
         self.run_screen(
