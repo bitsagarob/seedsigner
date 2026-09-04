@@ -205,3 +205,37 @@ def test_the_broadcast_transaction_carries_a_valid_signature(data, root):
 
     signature = ec.SchnorrSig.parse(witness[0])
     assert ec.PublicKey.from_xonly(output_key).schnorr_verify(signature, msg)
+
+
+def test_the_policy_is_recovered_and_proven_against_the_coin(data, root):
+    """A taproot output key commits to the whole arrangement, so the policy can
+    be recovered from the transaction and then checked against the coin holding
+    the money. That is stronger than reading it off a wallet file: the file says
+    what someone wrote down, this says what the coin will accept."""
+    psbt = PSBT.from_string(data["psbt_round_one"])
+    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
+    policy = mp.verify_policy(psbt, role)
+    assert policy is not None
+    assert (policy.threshold, policy.total) == (2, 3)
+    assert str(policy) == "2 of 3"
+
+
+def test_a_tampered_leaf_yields_no_policy_rather_than_a_wrong_one(data, root):
+    """The whole reason to check against the coin. A screen confidently showing
+    the wrong threshold is worse than one showing none."""
+    psbt = PSBT.from_string(data["psbt_round_one"])
+    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
+    scope = psbt.inputs[role.input_index]
+
+    control_block, value = next(iter(scope.taproot_scripts.items()))
+    raw = bytes(value)
+    scope.taproot_scripts[control_block] = raw[:1] + bytes([raw[1] ^ 0x01]) + raw[2:]
+    assert mp.verify_policy(psbt, role) is None
+
+
+def test_a_swapped_coin_yields_no_policy(data, root):
+    psbt = PSBT.from_string(data["psbt_round_one"])
+    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
+    spk = psbt.inputs[role.input_index].witness_utxo.script_pubkey
+    spk.data = spk.data[:2] + bytes(32)
+    assert mp.verify_policy(psbt, role) is None

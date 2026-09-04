@@ -1471,6 +1471,8 @@ class PSBTMusig2RoundView(View):
             session = musig2_session.Musig2Session()
             self.controller.musig2_session = session
 
+        roles = [r for r in musig2_psbt.roles_for_root(psbt, psbt_parser.root)
+                 if r.is_keypath]
         try:
             progress = musig2_session.advance(psbt, psbt_parser.root, session)
         except musig2_psbt.Musig2Error as e:
@@ -1491,6 +1493,17 @@ class PSBTMusig2RoundView(View):
             progress.skipped_leaves,
         )
 
+        # What the arrangement actually permits, recovered from the transaction
+        # and checked against the coin being spent rather than read off a wallet
+        # file the device does not have. Nothing is shown when it cannot be
+        # proven: a wrong "2 of 3" is worse than no number.
+        policy = None
+        try:
+            policy = musig2_psbt.verify_policy(psbt, roles[0])
+        except Exception as e:
+            logger.info("PSBTMusig2Round: policy not established: %s", e)
+        title = _("MuSig2 {policy}").format(policy=policy) if policy else _("MuSig2")
+
         # No "nonce" and no "partial signature". The owner of a 2-of-3 has two
         # things to act on: nothing is signed yet, and they have to come back
         # once the others have been. Naming the cryptography instead buries both.
@@ -1504,7 +1517,7 @@ class PSBTMusig2RoundView(View):
 
         self.run_screen(
             LargeIconStatusScreen,
-            title=_("MuSig2"),
+            title=title,
             status_headline=headline,
             text=text,
             show_back_button=False,

@@ -33,6 +33,7 @@ from embit.hashes import hash160, sha256, tagged_hash
 from embit.transaction import SIGHASH
 
 from seedsigner.helpers import musig2 as m
+from seedsigner.helpers.musig2 import xbytes
 
 FIELD_PARTICIPANTS = 0x1A
 FIELD_PUBNONCE = 0x1B
@@ -46,6 +47,16 @@ HARDENED = 0x80000000
 
 class Musig2Error(Exception):
     pass
+
+
+class Musig2Policy(NamedTuple):
+    """What the arrangement lets people do, once it has been checked."""
+
+    threshold: int
+    total: int
+
+    def __str__(self):
+        return "%d of %d" % (self.threshold, self.total)
 
 
 class Musig2Role(NamedTuple):
@@ -200,6 +211,124 @@ def verify_against_utxo(psbt, role: Musig2Role) -> None:
     if script_pubkey[:2] != b"\x51\x20" or script_pubkey[2:] != m.xbytes(tweaked.Q):
         raise Musig2Error(
             "input %d: the aggregate key does not lock this coin" % role.input_index)
+
+
+def _leaf_hash(leaf_script_field: bytes) -> tuple:
+    """(leaf hash, script) from a PSBT_IN_TAP_LEAF_SCRIPT value.
+
+    The value is the script with its leaf version glued on the end, which is
+    easy to miss: hashing the whole thing produces a plausible 32 bytes that
+    matches nothing."""
+    raw = bytes(leaf_script_field)
+    script, version = raw[:-1], raw[-1]
+    return tagged_hash("TapLeaf",
+                       bytes([version]) + len(script).to_bytes(1, "big") + script), script
+
+
+def _root_from_control_block(leaf: bytes, control_block: bytes) -> bytes:
+    """Fold a leaf up its merkle path, per BIP-341.
+
+    The path is in the control block rather than inferable from the leaves, so
+    this works for any tree shape rather than only the two-leaf one in front of
+    us today."""
+    node = leaf
+    for i in range(33, len(control_block), 32):
+        sibling = control_block[i:i + 32]
+        node = tagged_hash("TapBranch", min(node, sibling) + max(node, sibling))
+    return node
+
+
+def verify_policy(psbt, role: Musig2Role) -> Optional[Musig2Policy]:
+    """Work out what this arrangement permits, and prove it against the coin.
+
+    A taproot output key commits to the whole script tree, so the entire policy
+    can be recovered from the PSBT and then checked: rebuild the tree, tweak the
+    internal key with it, and see whether the result is the key that actually
+    locks the money. Any other arrangement gives a different key and fails.
+
+    That is worth more than reading a policy off a wallet file. The file says
+    what someone wrote down; this says what the coin will actually accept.
+
+    Returns None rather than a guess whenever the arrangement is not the shape
+    this can reason about. Inferring a policy from numbers an attacker supplied
+    is the change-spoof mistake, and a wrong "2 of 3" on screen is worse than no
+    number at all.
+    """
+    scope = psbt.inputs[role.input_index]
+    if not role.is_keypath or scope.taproot_internal_key is None:
+        return None
+
+    aggregates = {agg: [blob[i:i + 33] for i in range(0, len(blob), 33)]
+                  for agg, blob in scope_fields(scope, FIELD_PARTICIPANTS).items()}
+    if not aggregates:
+        return None
+
+    # Every aggregate the same size, so "threshold" means one thing.
+    sizes = {len(p) for p in aggregates.values()}
+    if len(sizes) != 1:
+        return None
+    threshold = sizes.pop()
+
+    keys = {k for participants in aggregates.values() for k in participants}
+    total = len(keys)
+    if threshold < 1 or total < threshold:
+        return None
+
+    # One aggregate per combination of keys, or this is not a plain t-of-n.
+    expected = 1
+    for i in range(threshold):
+        expected = expected * (total - i) // (i + 1)
+    if len(aggregates) != expected:
+        return None
+
+    leaves = {}
+    root = None
+    for control_block, value in scope.taproot_scripts.items():
+        leaf, script = _leaf_hash(value)
+        # Each leaf is one key checked once: OP_PUSHBYTES_32 <key> OP_CHECKSIG.
+        if len(script) != 34 or script[0] != 0x20 or script[33] != 0xAC:
+            return None
+        leaves[leaf] = script[1:33]
+        candidate = _root_from_control_block(leaf, bytes(control_block))
+        if root is not None and candidate != root:
+            return None
+        root = candidate
+    if root is None or len(leaves) != len(aggregates) - 1:
+        return None
+
+    # Every aggregate has to be accounted for: one on the key path, the rest
+    # each in a leaf, and each derived from its own participants.
+    unclaimed = dict(leaves)
+    for parent_agg, participants in aggregates.items():
+        fingerprint = hash160(parent_agg)[:4]
+        entry = next(((leaf_hashes, der)
+                      for _, (leaf_hashes, der) in scope.taproot_bip32_derivations.items()
+                      if der.fingerprint == fingerprint), None)
+        if entry is None:
+            return None
+        leaf_hashes, der = entry
+        try:
+            _, derived = _bip32_tweaks(parent_agg, der.derivation)
+        except Musig2Error:
+            return None
+        if not leaf_hashes:
+            if xbytes(derived) != scope.taproot_internal_key.xonly():
+                return None
+            continue
+        if unclaimed.pop(leaf_hashes[0], None) != xbytes(derived):
+            return None
+    if unclaimed:
+        return None
+
+    # The whole thing, against the money.
+    tweak = tagged_hash("TapTweak", scope.taproot_internal_key.xonly() + root)
+    output_key = m.point_add(m.cpoint(b"\x02" + scope.taproot_internal_key.xonly()),
+                             m.point_mul_base(m.int_from_bytes(tweak)))
+    script_pubkey = scope.utxo.script_pubkey.data
+    if script_pubkey[:2] != b"\x51\x20" or script_pubkey[2:] != xbytes(output_key):
+        return None
+
+    return Musig2Policy(threshold=threshold, total=total)
 
 
 def sighash_for(psbt, role: Musig2Role) -> bytes:
