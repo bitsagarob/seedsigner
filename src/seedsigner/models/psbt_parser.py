@@ -1307,6 +1307,14 @@ class PSBTParser():
         self._check_fee_rate()
 
         for vout in self.psbt.tx.vout:
+            # A BIP-375 silent payment output has no script until signing derives it. It is still
+            # worth the dust check below, which only reads the amount, but it can never be an
+            # OP_RETURN and asking would crash on None.
+            if vout.script_pubkey is None:
+                if vout.value < DUST_THRESHOLD:
+                    self.risk_warnings.add(RiskWarning.DUST_OUTPUT)
+                    break
+                continue
             if vout.script_pubkey.data and vout.script_pubkey.data[0] == OPCODES.OP_RETURN:
                 continue
             if vout.value < DUST_THRESHOLD:
