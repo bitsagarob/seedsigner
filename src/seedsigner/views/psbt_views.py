@@ -885,9 +885,8 @@ class PSBTPaymentNameWarningView(View):
                 DireWarningScreen,
                 title=_("Wrong recipient"),
                 status_headline=_("Name does not match"),
-                text=_("The proof for %(name)s does not cover this payment. This transaction pays "
-                       "someone else. A silent payment address is derived, so there is nothing on "
-                       "screen you can check by eye.") % {"name": self.hrn},
+                text=_("%(name)s: the proof covers a different recipient. This pays someone "
+                       "else.") % {"name": self.hrn},
                 show_back_button=True,
                 button_data=[self.CONTINUE],
             )
@@ -897,10 +896,8 @@ class PSBTPaymentNameWarningView(View):
                 WarningScreen,
                 title=_("Not verified"),
                 status_headline=_("No date on device"),
-                text=_("This device has no date, so it cannot tell whether the proof for "
-                       "%(name)s is current. To check it, set the date from a QR on a second "
-                       "screen, not on the machine that made this transaction, then load this "
-                       "transaction again.") % {"name": self.hrn},
+                text=_("%(name)s: the proof is unchecked. Scan a date QR from a second "
+                       "screen.") % {"name": self.hrn},
                 show_back_button=True,
                 button_data=[self.CONTINUE],
             )
@@ -912,9 +909,7 @@ class PSBTPaymentNameWarningView(View):
                 WarningScreen,
                 title=_("Not verified"),
                 status_headline=headline,
-                text=_("The proof for %(name)s is outside its validity window as this device "
-                       "reads the date. Either the proof is stale or this device's date is "
-                       "wrong.") % {"name": self.hrn},
+                text=_("%(name)s: the proof is outside its validity window.") % {"name": self.hrn},
                 show_back_button=True,
                 button_data=[self.CONTINUE],
             )
@@ -926,7 +921,7 @@ class PSBTPaymentNameWarningView(View):
                 WarningScreen,
                 title=_("Not verified"),
                 status_headline=_("Proof failed"),
-                text=_("The payment name %(name)s could not be verified: %(detail)s")
+                text=_("%(name)s could not be verified: %(detail)s")
                      % {"name": self.hrn, "detail": self.detail or _("unknown reason")},
                 show_back_button=True,
                 button_data=[self.CONTINUE],

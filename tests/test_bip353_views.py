@@ -229,3 +229,64 @@ class TestWarningViewOffersNoDeadEnd(BaseTest):
         targets = set(re.findall(r"Destination\(\s*([A-Za-z_]+)", source))
         assert targets == {"BackStackView", "PSBTAddressDetailsView"}, (
             f"the warning view can route to {sorted(targets)}")
+
+
+class TestWarningTextFits(BaseTest):
+    """Each warning has to fit a 240x240 screen with a headline and a button on it
+
+    Found by looking at one: the no-date warning ran past the bottom and its last line was drawn
+    underneath the button, so the sentence telling the user what to do was the part they could not
+    read. TextArea does not raise for this. It lays the text out, logs "Text cannot fit in target
+    rect", and carries on, which is why nothing failed until somebody looked at a screenshot.
+
+    That log line is the component's own verdict, so the test listens for it rather than
+    re-deriving the geometry and getting it subtly wrong.
+    """
+
+    NAME = "rob@silentpayments.net"
+
+    def setup_method(self):
+        super().setup_method()
+        from seedsigner.gui.renderer import Renderer
+
+        self.mock_renderer = make_test_renderer()
+        self.renderer_patch = patch.object(
+            Renderer, "get_instance", return_value=self.mock_renderer)
+        self.renderer_patch.start()
+
+    def teardown_method(self):
+        self.renderer_patch.stop()
+        super().teardown_method()
+
+    def _texts(self):
+        """The real strings the view builds, with a realistic name substituted in"""
+        return {
+            "mismatch":
+                "%s: the proof covers a different recipient. This pays someone else." % self.NAME,
+            "no-clock":
+                "%s: the proof is unchecked. Scan a date QR from a second screen." % self.NAME,
+            "expired":
+                "%s: the proof is outside its validity window." % self.NAME,
+            "failed":
+                "%s could not be verified: the DNSSEC chain did not validate" % self.NAME,
+        }
+
+    @pytest.mark.parametrize("case", ["mismatch", "no-clock", "expired", "failed"])
+    def test_the_warning_text_fits_its_screen(self, case, caplog):
+        import logging
+
+        from seedsigner.gui.screens.screen import ButtonOption, WarningScreen
+
+        with caplog.at_level(logging.WARNING, logger="seedsigner.gui.components"):
+            WarningScreen(
+                title="Not verified",
+                status_headline="Check this",
+                text=self._texts()[case],
+                show_back_button=True,
+                button_data=[ButtonOption("I accept the risk")],
+            )
+
+        overflow = [r.getMessage() for r in caplog.records if "cannot fit" in r.getMessage()]
+        assert not overflow, (
+            f"the {case} warning does not fit its screen: {overflow[0]}; "
+            f"its last line would be drawn under the button")
