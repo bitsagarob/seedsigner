@@ -195,3 +195,37 @@ class TestVerdictLookup(BaseTest):
         # Garbage in, a refusal out, and specifically not a crash
         assert isinstance(result, Result)
         assert result.status == Status.CHAIN_INVALID
+
+
+class TestWarningViewOffersNoDeadEnd(BaseTest):
+    """Every button on the warning screen must lead back into the review, not out of it
+
+    This is a regression test for a bug that only showed up when the flow was driven end to end.
+    The no-date screen offered "Scan date QR", which looked obviously right and was not: ScanView
+    returns to the main menu when it finishes, nothing carries a half-finished PSBT review back,
+    and there is no menu path to resume one. So the button set the clock and silently discarded the
+    transaction the user was in the middle of approving.
+    """
+
+    def test_the_only_button_continues_the_review(self):
+        from seedsigner.views.psbt_views import PSBTPaymentNameWarningView
+
+        buttons = [v for k, v in vars(PSBTPaymentNameWarningView).items() if k.isupper()]
+        assert len(buttons) == 1, f"expected one button option, found {len(buttons)}"
+        assert buttons[0] is PSBTPaymentNameWarningView.CONTINUE
+
+    def test_no_status_routes_away_from_the_psbt(self):
+        """Whatever the verdict, accepting it must land back on the recipient screen"""
+        import inspect
+        import re
+
+        from seedsigner.views.psbt_views import PSBTPaymentNameWarningView
+
+        source = inspect.getsource(PSBTPaymentNameWarningView)
+        assert "Destination(ScanView" not in source, (
+            "the warning view routes to ScanView, which returns to the main menu and loses the "
+            "PSBT review; it needs a return path before that button can exist")
+        # The only destinations this view may produce are back, or on into the review.
+        targets = set(re.findall(r"Destination\(\s*([A-Za-z_]+)", source))
+        assert targets == {"BackStackView", "PSBTAddressDetailsView"}, (
+            f"the warning view can route to {sorted(targets)}")

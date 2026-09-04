@@ -860,7 +860,13 @@ class PSBTPaymentNameWarningView(View):
     """
 
     CONTINUE = ButtonOption("I accept the risk")
-    SCAN_DATE = ButtonOption("Scan date QR")
+
+    # There is deliberately no "scan a date now" button, though the no-date screen is exactly
+    # where one belongs. ScanView returns to the main menu when it is done, and nothing carries a
+    # half-finished PSBT review back, so that button would set the clock and silently throw the
+    # transaction away. Resuming properly means threading a return destination through inherited
+    # scan code, which is a bigger change than this screen justifies. Until then the text says to
+    # scan a date and the button does not promise something that does not happen.
 
     def __init__(self, address_num: int, status: str, hrn: str = None, detail: str = None):
         super().__init__()
@@ -892,16 +898,12 @@ class PSBTPaymentNameWarningView(View):
                 title=_("Not verified"),
                 status_headline=_("No date on device"),
                 text=_("This device has no date, so it cannot tell whether the proof for "
-                       "%(name)s is current. Scan a date QR from a second screen, not from the "
-                       "machine that made this transaction.") % {"name": self.hrn},
+                       "%(name)s is current. To check it, set the date from a QR on a second "
+                       "screen, not on the machine that made this transaction, then load this "
+                       "transaction again.") % {"name": self.hrn},
                 show_back_button=True,
-                button_data=[self.SCAN_DATE, self.CONTINUE],
+                button_data=[self.CONTINUE],
             )
-            if selected_menu_num == 0:
-                from seedsigner.views.scan_views import ScanView
-                # Straight back here afterwards, with the proof re-checked against the new date.
-                self.controller.resume_main_flow = None
-                return Destination(ScanView)
 
         elif self.status in (bip353.Status.EXPIRED, bip353.Status.NOT_YET_VALID):
             headline = (_("Proof expired") if self.status == bip353.Status.EXPIRED
@@ -914,11 +916,8 @@ class PSBTPaymentNameWarningView(View):
                        "reads the date. Either the proof is stale or this device's date is "
                        "wrong.") % {"name": self.hrn},
                 show_back_button=True,
-                button_data=[self.SCAN_DATE, self.CONTINUE],
+                button_data=[self.CONTINUE],
             )
-            if selected_menu_num == 0:
-                from seedsigner.views.scan_views import ScanView
-                return Destination(ScanView)
 
         else:
             # A broken chain, a record BIP-353 refuses, or an image that cannot validate at all.
