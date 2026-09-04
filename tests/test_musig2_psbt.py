@@ -13,16 +13,17 @@ output key. Between them they say that the two implementations agree about the
 aggregate key, the tweak chain and the message, which is the whole of what could
 silently go wrong.
 
-The keys are throwaway and the network is regtest. Nothing here is a secret.
+The three seeds are published BIP-39 test vectors and the network is regtest, so
+the fixture can go through the real Seed code path and nothing in it can ever be
+mistaken for a key worth stealing.
 """
 
 import copy
-import hashlib
 import json
 import os
 
 import pytest
-from embit import bip32, ec
+from embit import bip32, bip39, ec
 from embit.psbt import PSBT
 from embit.transaction import Transaction
 
@@ -40,8 +41,7 @@ def data():
 
 @pytest.fixture(scope="module")
 def root(data):
-    seed = hashlib.sha256(data["seed_b_sha256_of"].encode()).digest()
-    return bip32.HDKey.from_seed(seed)
+    return bip32.HDKey.from_seed(bip39.mnemonic_to_seed(data["mnemonics"]["B"]))
 
 
 def roles(data, root, which="psbt_round_one"):
@@ -72,13 +72,39 @@ def test_role_matches_what_core_encoded(data, root):
     assert role.is_xonly == expected["is_xonly"]
 
 
-def test_participant_order_is_not_the_order_a_human_would_write(data, root):
+def test_participant_order_is_the_sorted_one_not_the_written_one(data, root):
     """BIP-390 sorts, so this is a live example of the trap rather than a
-    hypothetical one. If these ever come out sorted the same way by accident,
-    the fixture has stopped testing what it was written to test."""
+    hypothetical one."""
     role = keypath_role(data, root)
-    assert role.participants != sorted(role.participants, reverse=True)
     assert role.participants == sorted(role.participants)
+
+
+def test_an_odd_parity_participant_key_is_still_recognised(data, root):
+    """A taproot derivation stores 32 bytes and cannot say which of the two
+    points it means, while the participant list carries a real parity byte. Half
+    of all keys are odd, so matching 33 against 33 finds nothing for half the
+    seeds that should have matched, and finds it silently. This fixture's seed
+    is one of the odd ones, which is the only reason the bug was ever seen."""
+    role = keypath_role(data, root)
+    assert role.my_pubkey[0] == 0x03, "the fixture no longer exercises odd parity"
+    assert role.my_pubkey[1:] in [
+        pub.xonly()
+        for pub in PSBT.from_string(data["psbt_round_one"]).inputs[0].taproot_bip32_derivations
+    ]
+
+
+def test_the_wallet_recognises_the_input_as_its_own(data):
+    """What decides whether the review screen shows the seed or a shrug. MuSig2
+    participants appear as ordinary taproot derivations, so the existing check
+    works, but nothing said so until it was run."""
+    from seedsigner.models.psbt_parser import PSBTParser
+    from seedsigner.models.seed import Seed
+    from seedsigner.models.settings_definition import SettingsConstants
+
+    seed = Seed(mnemonic=data["mnemonics"]["B"].split())
+    assert PSBTParser.has_matching_input_fingerprint(
+        PSBT.from_string(data["psbt_round_one"]), seed,
+        network=SettingsConstants.REGTEST)
 
 
 def test_our_key_derives_from_the_seed(data, root):

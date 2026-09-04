@@ -114,15 +114,21 @@ def roles_for_root(psbt, root) -> List[Musig2Role]:
         if not participants_by_agg:
             continue
 
-        # our own participant keys on this input, by the path that makes them
+        # Our own participant keys on this input, by the path that makes them.
+        #
+        # Keyed x-only, and matched x-only below, because a taproot derivation
+        # stores 32 bytes and cannot say which of the two points it means. The
+        # participant list does carry a real parity byte, and about half of all
+        # keys are odd, so comparing 33 bytes against 33 bytes silently finds
+        # nothing for half the seeds that should have matched.
         mine = {
-            pub.sec(): der.derivation
+            pub.xonly(): der.derivation
             for pub, (_, der) in scope.taproot_bip32_derivations.items()
             if der.fingerprint == my_fingerprint
         }
 
         for parent_agg, participants in participants_by_agg.items():
-            my_pubkey = next((pk for pk in participants if pk in mine), None)
+            my_pubkey = next((pk for pk in participants if pk[1:] in mine), None)
             if my_pubkey is None:
                 continue
 
@@ -162,7 +168,7 @@ def roles_for_root(psbt, root) -> List[Musig2Role]:
                 participants=participants,
                 my_pubkey=my_pubkey,
                 my_index=participants.index(my_pubkey),
-                my_derivation=mine[my_pubkey],
+                my_derivation=mine[my_pubkey[1:]],
                 agg_id=agg_id,
                 leaf_hash=leaf_hash,
                 tweaks=tweaks,
