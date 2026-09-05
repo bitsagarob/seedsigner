@@ -46,14 +46,16 @@ class TestMusig2CardScreensFit(BaseTest):
         """Two buttons take about a line of height, which is what clipped it before."""
         import logging
 
+        from seedsigner.gui.components import GUIConstants
         from seedsigner.gui.screens.screen import LargeIconStatusScreen
         from seedsigner.views.psbt_views import PSBTMusig2CardOfferView
 
         with caplog.at_level(logging.WARNING, logger="seedsigner.gui.components"):
             LargeIconStatusScreen(
-                title="Two Steps",
+                title="MuSig2",
                 status_icon_size=0,
-                status_headline=None,
+                status_headline="Two Steps",
+                status_color=GUIConstants.BODY_FONT_COLOR,
                 text="A card can hold your place, so you can power off between them.",
                 show_back_button=True,
                 button_data=[PSBTMusig2CardOfferView.USE_CARD,

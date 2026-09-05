@@ -1442,10 +1442,16 @@ class PSBTMusig2CardOfferView(View):
         # its height to the text, which two buttons and this sentence both need.
         selected_menu_num = self.run_screen(
             LargeIconStatusScreen,
-            # TRANSLATOR_NOTE: Title: this signing has two steps with a wait in between
-            title=_("Two Steps"),
+            # The title and headline follow PSBTMusig2RoundView, which titles its screens
+            # "MuSig2" and heads them "Step 1 of 2". Anything else would make the offer
+            # look like it came from somewhere other than the flow it belongs to.
+            title=_("MuSig2"),
             status_icon_size=0,
-            status_headline=None,
+            # TRANSLATOR_NOTE: This signing has two steps with a wait in between
+            status_headline=_("Two Steps"),
+            # Body-coloured, not the green a status screen defaults to: nothing has
+            # succeeded here, a question is being asked.
+            status_color=GUIConstants.BODY_FONT_COLOR,
             text=_("A card can hold your place, so you can power off between them."),
             show_back_button=True,
             button_data=button_data,
