@@ -391,11 +391,6 @@ def _wipe(buf: bytearray) -> None:
     buf[:] = bytes(len(buf))
 
 
-def _pubnonce(secnonce: bytearray) -> bytes:
-    k1, k2 = m.int_from_bytes(bytes(secnonce[0:32])), m.int_from_bytes(bytes(secnonce[32:64]))
-    return m.cbytes(m.point_mul_base(k1)) + m.cbytes(m.point_mul_base(k2))
-
-
 def _refuse_mixed(psbt, root) -> None:
     """Inputs this seed could sign the ordinary way are not handled here."""
     for i, scope in enumerate(psbt.inputs):
@@ -412,17 +407,34 @@ class Session:
 
     Power off between rounds and the attempt restarts. Never write one to the card: a copied
     card that replays a nonce yields two signatures under one nonce, which leaks the key.
+
+    A nonce store that can enforce single use (a smartcard) subclasses this and overrides
+    `new_nonce` and `sign`; `advance` never touches the secret nonce itself.
     """
 
     def __init__(self):
-        self._nonces: Dict[tuple, bytearray] = {}
+        self._nonces: Dict[tuple, tuple] = {}   # key -> (secret nonce or handle, public nonce)
+
+    def new_nonce(self, psbt, role: Role, msg: bytes, secret: bytearray):
+        """(secret nonce or handle, public nonce) for one signing.
+
+        A card-backed store may return a handle it finds in the psbt instead of a new
+        nonce, which is how a device that lost power resumes.
+        """
+        secnonce, pubnonce = m.nonce_gen(secret, role.pubkey, None, msg, None)
+        return secnonce, pubnonce
+
+    def sign(self, psbt, secnonce, role: Role, secret: bytearray, context: "m.SessionContext") -> bytes:
+        """The partial signature; the secret nonce is spent."""
+        return m.sign(secnonce, secret, context)
 
     def __len__(self):
         return len(self._nonces)
 
     def clear(self) -> None:
-        for secnonce in self._nonces.values():
-            _wipe(secnonce)
+        for secnonce, _ in self._nonces.values():
+            if isinstance(secnonce, bytearray):
+                _wipe(secnonce)
         self._nonces.clear()
 
     def advance(self, psbt, root) -> Progress:
@@ -464,10 +476,10 @@ class Session:
             key = (role.input_index, agg.key, role.pubkey, msg)
             if key not in self._nonces:
                 secret = _secret(root, role)
-                self._nonces[key] = m.nonce_gen(secret, role.pubkey, None, msg, None)[0]
+                self._nonces[key] = self.new_nonce(psbt, role, msg, secret)
                 _wipe(secret)
             # Always written, so a lost read-back of the first round can be repeated.
-            write_pubnonce(psbt, role, _pubnonce(self._nonces[key]))
+            write_pubnonce(psbt, role, self._nonces[key][1])
             nonces = pubnonces(psbt, role)
             if None in nonces:
                 waiting += 1
@@ -476,7 +488,7 @@ class Session:
             secret = _secret(root, role)
             context = m.SessionContext(m.nonce_agg(nonces), agg.participants, agg.tweaks, agg.is_xonly, msg)
             try:
-                sig = m.sign(self._nonces.pop(key), secret, context)
+                sig = self.sign(psbt, self._nonces.pop(key)[0], role, secret, context)
             finally:
                 _wipe(secret)
             write_partial_sig(psbt, role, sig)

@@ -229,10 +229,32 @@ def test_a_different_transaction_gets_a_different_nonce(data, roots):
 def test_clear_wipes_every_secret_nonce(psbt, roots):
     session = mp.Session()
     session.advance(psbt, roots["B"])
-    held = list(session._nonces.values())
+    held = [secnonce for secnonce, _ in session._nonces.values()]
     session.clear()
     assert len(session) == 0
     assert all(bytes(n) == bytes(len(n)) for n in held)
+
+
+def test_a_nonce_store_can_be_swapped_in(data, psbt, roots):
+    """The seam a card-backed nonce store uses: it sees every nonce request and every signing."""
+    calls = []
+
+    class Store(mp.Session):
+        def new_nonce(self, psbt, role, msg, secret):
+            calls.append("nonce")
+            return super().new_nonce(psbt, role, msg, secret)
+
+        def sign(self, psbt, secnonce, role, secret, context):
+            calls.append("sign")
+            return super().sign(psbt, secnonce, role, secret, context)
+
+    session = Store()
+    session.advance(psbt, roots["B"])
+    role = role_of(psbt, roots["B"])
+    other, nonce = core_nonce(data, role)
+    psbt.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, other)] = nonce
+    session.advance(psbt, roots["B"])
+    assert calls == ["nonce", "sign"]
 
 
 def test_a_seed_that_also_owns_an_ordinary_input_is_refused(psbt, roots):
