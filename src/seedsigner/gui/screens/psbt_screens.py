@@ -595,16 +595,10 @@ class PSBTMathScreen(ButtonListScreen):
 
 @dataclass
 class PSBTAddressDetailsScreen(ButtonListScreen):
-    """Where this output is going, and, when the PSBT proves one, who owns it.
-
-    A BIP-353 payment name replaces the address rather than sitting beside it, because for a
-    BIP-352 silent payment the address is derived from the recipient's keys and the sender's
-    inputs: it appears on no screen the user has ever seen, in no wallet, and nowhere in the
-    conversation that set up the payment. Reading it back to them checks nothing. The name is the
-    only thing they can recognise, so the name is what gets the space and the emphasis.
-
-    The derived address is still shown, truncated and unemphasised, because it is what actually
-    goes on chain and hiding it entirely would be a different kind of dishonesty.
+    """
+        Shows the recipient's address and amount they will receive, or the payment name when the
+        psbt proves one. For a silent payment the address is derived, so the name is the only
+        thing the user can recognise.
     """
     address: str = None
     amount: int = 0
@@ -629,13 +623,8 @@ class PSBTAddressDetailsScreen(ButtonListScreen):
         next_y = int(GUIConstants.COMPONENT_PADDING/2)
 
         if self.payment_name:
-            # BIP-353 says wallets SHOULD prefix the name with a bitcoin sign, to stop it reading
-            # as an ordinary email address. It is omitted here because this device cannot draw it:
-            # of the seven bundled fonts only PlemolJP, the CJK console font, has U+20BF, and
-            # neither the body font nor the fixed-width one does. The prefix rendered as an empty
-            # box, which says less than no prefix at all and looks like a bug in the name. The
-            # screen title and the status line underneath carry the meaning instead. Do not put it
-            # back without checking the font first.
+            # No bitcoin sign prefix: of the bundled fonts only PlemolJP has U+20BF, so it drew
+            # as an empty box. Check the font before putting it back.
             name = TextArea(
                 image_draw=draw,
                 canvas=center_img,
@@ -674,8 +663,7 @@ class PSBTAddressDetailsScreen(ButtonListScreen):
             width=self.canvas_width - 2*GUIConstants.EDGE_PADDING,
             screen_x=GUIConstants.EDGE_PADDING,
             screen_y=btc_amount.screen_y + btc_amount.height + GUIConstants.COMPONENT_PADDING,
-            # With a name above it the address is supporting detail, so it is given one truncated
-            # line rather than the two or three full ones it gets when it is all there is.
+            # Supporting detail when a name is shown, so one truncated line
             font_size=24 if not self.payment_name else 16,
             max_lines=None if not self.payment_name else 1,
             address=self.address,

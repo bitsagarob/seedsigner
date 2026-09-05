@@ -718,9 +718,6 @@ class PSBTAddressDetailsView(View):
     """
         Shows the recipient's address and amount they will receive
     """
-    # What the name line says under each verdict. Short, because it shares a 240px screen with an
-    # amount and an address, and because a user reading a signing device should not have to parse a
-    # sentence to learn whether the check passed.
     STATUS_TEXT = {
         bip353.Status.VERIFIED: _mft("name verified"),
         bip353.Status.NO_CLOCK: _mft("NOT VERIFIED: no date"),
@@ -732,10 +729,9 @@ class PSBTAddressDetailsView(View):
         bip353.Status.UNAVAILABLE: _mft("NOT VERIFIED: no validator"),
     }
 
+    # No date is a missing answer, not a bad one; only a failed check gets the error colour
     STATUS_COLOR = {
         bip353.Status.VERIFIED: GUIConstants.SUCCESS_COLOR,
-        # "No date" is a missing answer, not a bad one, and colouring it like a forged proof
-        # would train people to ignore the colour that matters.
         bip353.Status.NO_CLOCK: GUIConstants.WARNING_COLOR,
         bip353.Status.EXPIRED: GUIConstants.WARNING_COLOR,
         bip353.Status.NOT_YET_VALID: GUIConstants.WARNING_COLOR,
@@ -748,17 +744,14 @@ class PSBTAddressDetailsView(View):
     def __init__(self, address_num, warning_shown: bool = False):
         super().__init__()
         self.address_num = address_num
-        # Set once the user has confirmed the warning for this output, so returning from it does
-        # not bounce straight back into it.
+        # Set once the warning has been confirmed, so returning does not bounce straight back into it
         self.warning_shown = warning_shown
 
 
     def device_now(self):
         """Unix seconds the device is entitled to believe, or None if it has not been told.
 
-        None is a real answer here. Falling back to the system clock would mean judging a proof
-        against a hardcoded boot date, which either passes everything or fails everything depending
-        on which side of the date the signatures fall, and says "verified" either way.
+        Falling back to the system clock would judge the proof against a hardcoded boot date.
         """
         offset = getattr(self.controller, "timecode_offset", None)
         if offset is None:
@@ -802,9 +795,7 @@ class PSBTAddressDetailsView(View):
             # TRANSLATOR_NOTE: Short for "Next step"
             button_data.append(ButtonOption("Next"))
 
-        # A BIP-353 name, if this output carries a proof and it has not been shown yet. The check
-        # runs here rather than at parse time because it needs the device's date, and the user may
-        # go and scan a timecode QR between the two, precisely because a screen told them to.
+        # Checked here rather than at parse time, since it needs the device's date
         payment_name = self.verified_payment_name(psbt_parser, self.address_num)
         if payment_name is not None and not payment_name.is_verified and not self.warning_shown:
             return Destination(
@@ -820,7 +811,7 @@ class PSBTAddressDetailsView(View):
             address=psbt_parser.destination_addresses[self.address_num],
             amount=psbt_parser.destination_amounts[self.address_num],
             payment_name=payment_name.hrn if payment_name else None,
-            payment_name_status=self.STATUS_TEXT.get(payment_name.status) if payment_name else None,
+            payment_name_status=_(self.STATUS_TEXT[payment_name.status]) if payment_name else None,
             payment_name_color=self.STATUS_COLOR.get(
                 payment_name.status, GUIConstants.ERROR_COLOR) if payment_name else None,
         )
@@ -846,27 +837,14 @@ class PSBTAddressDetailsView(View):
 
 
 class PSBTPaymentNameWarningView(View):
-    """Shown when an output's BIP-353 proof did not verify, before the amount is shown.
-
-    Nothing here blocks signing. Every state is a warning the user confirms, which is Rob's call
-    and matches how SeedSigner treats its other risk warnings: a device that refuses outright turns
-    any bug in this validator into a spend that cannot be made, with nothing the user can do.
-
-    That decision puts the whole burden on the wording, so the wording is specific rather than
-    generic. "Could not verify" is useless: an expired proof, a device with no date, and a proof
-    that vouches for somebody else are three completely different situations, and only one of them
-    means an attack is in progress. They get three different screens, three different severities,
-    and in the mismatch case the DireWarningScreen and a button that does not say "Continue".
+    """
+        Shown when an output's BIP-353 proof did not verify. Nothing here blocks signing; each
+        state is a warning the user confirms, so the wording carries the weight.
     """
 
+    # No "scan a date now" button: ScanView returns to the main menu and nothing carries a
+    # half-finished review back, so it would silently discard the transaction
     CONTINUE = ButtonOption("I accept the risk")
-
-    # There is deliberately no "scan a date now" button, though the no-date screen is exactly
-    # where one belongs. ScanView returns to the main menu when it is done, and nothing carries a
-    # half-finished PSBT review back, so that button would set the clock and silently throw the
-    # transaction away. Resuming properly means threading a return destination through inherited
-    # scan code, which is a bigger change than this screen justifies. Until then the text says to
-    # scan a date and the button does not promise something that does not happen.
 
     def __init__(self, address_num: int, status: str, hrn: str = None, detail: str = None):
         super().__init__()
@@ -877,9 +855,7 @@ class PSBTPaymentNameWarningView(View):
 
 
     def run(self):
-        # The recipient is wrong. This is the only state that means somebody is probably lying to
-        # this device right now, so it gets the loudest screen and a button that makes the user
-        # say what they are accepting rather than merely acknowledging a notice.
+        # The only state that means somebody is probably lying to this device right now
         if self.status == bip353.Status.OUTPUT_MISMATCH:
             selected_menu_num = self.run_screen(
                 DireWarningScreen,
@@ -915,8 +891,6 @@ class PSBTPaymentNameWarningView(View):
             )
 
         else:
-            # A broken chain, a record BIP-353 refuses, or an image that cannot validate at all.
-            # A date QR would not help any of these, so it is not offered.
             selected_menu_num = self.run_screen(
                 WarningScreen,
                 title=_("Not verified"),
@@ -930,7 +904,6 @@ class PSBTPaymentNameWarningView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        # Warning accepted. Show the recipient, with the failure still on the screen in colour.
         return Destination(
             PSBTAddressDetailsView,
             view_args={"address_num": self.address_num, "warning_shown": True},
