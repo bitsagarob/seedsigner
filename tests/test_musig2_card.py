@@ -212,3 +212,69 @@ def test_a_card_that_refuses_to_open_twice_is_reported(psbt, roots, data, card):
     del psbt.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PARTIAL_SIG, role, role.pubkey)]
     with pytest.raises(mc.CardNonceError, match="already released"):
         mc.CardSession(card, sid=1).advance(psbt, roots["B"])
+
+
+# --- choosing it, silently ------------------------------------------------------------
+
+class FakeCardWithSecrets(FakeCard):
+    """A card that also answers what it is holding, so selection can be exercised."""
+
+    def __init__(self, root, seeds):
+        super().__init__(root)
+        self.seeds = seeds          # sid -> the root that seed makes
+        self.listed = 0
+
+    def seedkeeper_list_secret_headers(self):
+        self.listed += 1
+        return [{"id": sid, "type": mc.SECRET_TYPE_MASTERSEED} for sid in self.seeds]
+
+    def card_bip32_get_extendedkey(self, path, sid=None, option_flags=0x40):
+        # pysatochip answers its own ECPubkey, not embit's, so the shim carries the one
+        # method the caller uses rather than pretending to be either.
+        class Pub:
+            def __init__(self, sec):
+                self._sec = sec
+
+            def get_public_key_bytes(self, compressed=True):
+                return self._sec
+
+        return Pub(self.seeds[sid].key.sec()), self.seeds[sid].chain_code
+
+
+class Controller:
+    def __init__(self, connector=None):
+        self.Satochip_Connector = connector
+
+
+def test_no_card_means_the_nonce_stays_in_memory(roots):
+    assert mc.select(Controller(), roots["B"]) is None
+
+
+def test_a_card_holding_another_seed_is_not_used(roots):
+    card = FakeCardWithSecrets(roots["B"], {1: roots["A"]})
+    assert mc.select(Controller(card), roots["B"]) is None
+
+
+def test_a_card_holding_this_seed_is_used(roots):
+    card = FakeCardWithSecrets(roots["B"], {1: roots["A"], 2: roots["B"]})
+    session = mc.select(Controller(card), roots["B"])
+    assert isinstance(session, mc.CardSession) and session._sid == 2
+
+
+def test_a_card_that_refuses_to_be_listed_is_not_used(roots):
+    class Locked(FakeCardWithSecrets):
+        def seedkeeper_list_secret_headers(self):
+            raise RuntimeError("PIN required")
+
+    assert mc.select(Controller(Locked(roots["B"], {1: roots["B"]})), roots["B"]) is None
+
+
+def test_selecting_never_opens_a_reader(roots, monkeypatch):
+    """The whole point of choosing silently: no reader, no PIN prompt, no new screen."""
+    from seedsigner.helpers import seedkeeper_utils
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("selection tried to open a card")
+
+    monkeypatch.setattr(seedkeeper_utils, "init_satochip", refuse)
+    assert mc.select(Controller(), roots["B"]) is None

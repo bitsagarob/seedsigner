@@ -1416,16 +1416,22 @@ class PSBTMusig2RoundView(View):
     """
     One MuSig2 round. The first round produces no signature, and the screen says so
     rather than reporting a failure. The secret nonce between rounds lives on the
-    Controller, in memory only.
+    Controller, in memory only, unless a card that is already open is holding this
+    seed, in which case the card holds it and releases it once.
     """
 
     def run(self):
-        from seedsigner.helpers import musig2_psbt
+        from seedsigner.helpers import musig2_card, musig2_psbt
 
         psbt = self.controller.psbt
         root = self.controller.psbt_parser.root
         if self.controller.musig2_session is None:
-            self.controller.musig2_session = musig2_psbt.Session()
+            # A card that is already open and holding this seed keeps the secret nonce
+            # instead of memory, which is what lets the device be switched off between
+            # the rounds. Nothing here opens a reader or asks for a PIN, so a signing
+            # that has no card behind it is unaffected.
+            self.controller.musig2_session = (
+                musig2_card.select(self.controller, root) or musig2_psbt.Session())
 
         try:
             progress = self.controller.musig2_session.advance(psbt, root)

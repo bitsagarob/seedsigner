@@ -24,10 +24,13 @@ makes the nonce from the key it derives itself. `for_seed` says whether that hol
 it does not, the caller uses the base class and nothing changes.
 """
 
+import logging
 from typing import List, Optional
 
 from seedsigner.helpers import musig2 as m
 from seedsigner.helpers import musig2_psbt as mp
+
+logger = logging.getLogger(__name__)
 
 # BIP-174 proprietary field: 0xFC, then the identifier, then the subtype, then the key
 # data. The identifier keeps this out of the way of every other producer's fields.
@@ -40,6 +43,12 @@ SUBTYPE_SEALED_NONCE = 0x00
 SIZE_PUBNONCE = 66
 SIZE_SEALED = 144
 SIZE_SECNONCE = 97
+
+# The type byte a SeedKeeper files a master seed under: SECRET_TYPE_MASTER_SEED in the
+# applet, 'Masterseed' in pysatochip's SEEDKEEPER_DIC_TYPE. Written out rather than read
+# from pysatochip because the test suite replaces that package with a mock, and because
+# it is a wire value that cannot move without breaking every card already in the field.
+SECRET_TYPE_MASTERSEED = 0x10
 
 INS_MUSIG2_GENERATE_NONCE = 0x7E
 INS_MUSIG2_UNSEAL_NONCE = 0x7F
@@ -170,11 +179,12 @@ def for_seed(connector, root) -> Optional[CardSession]:
     try:
         headers = connector.seedkeeper_list_secret_headers()
     except Exception:
+        logger.info("musig2: the card would not list what it holds", exc_info=True)
         return None
 
     wanted = root.my_fingerprint
     for header in headers:
-        if header.get("type") != "Masterseed":
+        if header.get("type") != SECRET_TYPE_MASTERSEED:
             continue
         sid = header["id"]
         try:
@@ -184,6 +194,30 @@ def for_seed(connector, root) -> Optional[CardSession]:
         if _fingerprint(pubkey) == wanted:
             return CardSession(connector, sid)
     return None
+
+
+def select(controller, root) -> Optional[CardSession]:
+    """A card-backed session, if one can be had without interrupting the user.
+
+    Only a card that is already open is used: the connector the controller is holding
+    from whatever unlocked it earlier, which for the flow this is built for is loading
+    the seed off that same card. Nothing here opens a reader, and nothing here asks for
+    a PIN, because a PIN prompt appearing in the middle of signing is exactly the sort
+    of surprise that makes a signer untrustworthy. No card, no open connector, a locked
+    card or a card holding a different seed all mean the caller gets None and signs the
+    way it always has.
+    """
+    connector = getattr(controller, "Satochip_Connector", None)
+    if connector is None:
+        return None
+    try:
+        session = for_seed(connector, root)
+    except Exception:
+        logger.info("musig2: no card-backed nonce store, signing in memory", exc_info=True)
+        return None
+    if session is not None:
+        logger.info("musig2: secret nonces will be held on the card")
+    return session
 
 
 def _fingerprint(pubkey) -> bytes:
