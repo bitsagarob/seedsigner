@@ -704,16 +704,8 @@ class PSBTParser():
                 )
             script = out.script_pubkey
             if script is None or len(script.data) == 0:
-                # A BIP-375 silent payment output legitimately has no script yet. The script is
-                # derived from the recipient's scan key and this transaction's own inputs, and
-                # that derivation happens during signing, so at parse time PSBT_OUT_SP_V0_INFO is
-                # the whole definition of the output. Refusing it here refused every silent
-                # payment SEND, while spends were unaffected because their outputs are ordinary.
-                #
-                # The rule the check exists for still holds: an output nobody can describe cannot
-                # be authorised. An output with sp_data can be described, and better than most --
-                # it is the one case where the review screen has a payment name rather than an
-                # address the user has never seen before.
+                # A BIP-375 silent payment output has no script until signing; its sp_data
+                # describes it
                 scope = self.psbt.outputs[i] if i < len(self.psbt.outputs) else None
                 if getattr(scope, "sp_data", None) is None:
                     # An empty script has no address to show the user, so it cannot be
@@ -1079,19 +1071,11 @@ class PSBTParser():
                     f"Output {i} amount out of range: {value}",
                     code=RejectCode.AMOUNT_OUT_OF_RANGE,
                 )
-            # A BIP-375 silent payment output has no script yet: it is derived during signing from
-            # the recipient's scan key and this transaction's own inputs. So there is no policy to
-            # read and no address to render, and both of the calls below would fail on None.
-            #
-            # It is always a destination and never change. Change is an output this seed can prove
-            # it will control, and a silent payment output is by construction one only the
-            # recipient can, which is a different claim entirely.
-            #
-            # The address shown is the sp1 string the sender aimed at, rebuilt from the two keys
-            # in PSBT_OUT_SP_V0_INFO rather than taken from anywhere else, so what the screen says
-            # is what the transaction actually commits to.
-            if getattr(out, "sp_data", None) is not None and (
-                    vout[i].script_pubkey is None or len(vout[i].script_pubkey.data) == 0):
+            # A silent payment output is shown as the sp1 address it is aimed at, rebuilt from
+            # PSBT_OUT_SP_V0_INFO. Its script, if already present, is checked against that
+            # address at signing time, so the screen shows what the user means to pay. It is
+            # always a destination: only the recipient can control it.
+            if getattr(out, "sp_data", None) is not None:
                 self.destination_addresses.append(self._silent_payment_address(out))
                 self.destination_amounts.append(value)
                 self.destination_payment_names.append(self._read_payment_name(out))
@@ -1307,8 +1291,6 @@ class PSBTParser():
         self._check_fee_rate()
 
         for vout in self.psbt.tx.vout:
-            # A silent payment output has no script until its shares are in; it
-            # cannot be an OP_RETURN and must not crash the scan for one.
             if vout.script_pubkey is not None and vout.script_pubkey.data \
                     and vout.script_pubkey.data[0] == OPCODES.OP_RETURN:
                 continue

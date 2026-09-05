@@ -1,31 +1,14 @@
-"""Reading a MuSig2 arrangement out of a PSBT, and signing it.
-
-`tests/data/musig2_psbts.json` was captured from a live Bitcoin Core v31.1.0 on
-regtest, which matters more than it sounds: the fields under test are ones we do
-not generate, so a fixture we wrote ourselves would only prove that this module
-agrees with itself. Core is a second implementation, and every check below is
-really a check against it.
-
-Two of these run in the opposite direction to the rest. Core's own partial
-signature is verified by our code, and the final broadcast transaction's single
-64-byte witness is verified as an ordinary BIP-340 signature for the taproot
-output key. Between them they say that the two implementations agree about the
-aggregate key, the tweak chain and the message, which is the whole of what could
-silently go wrong.
-
-The three seeds are published BIP-39 test vectors and the network is regtest, so
-the fixture can go through the real Seed code path and nothing in it can ever be
-mistaken for a key worth stealing.
 """
-
-import copy
+    MuSig2 from a psbt: reading the arrangement, checking it against the coin, and the two
+    rounds. The fixture is a 2-of-3 captured from Bitcoin Core; see docs/musig2.md.
+"""
 import json
 import os
 
 import pytest
-from embit import bip32, bip39, ec
-from embit.psbt import PSBT
-from embit.transaction import Transaction
+from embit import bip32, bip39
+from embit.psbt import PSBT, InputScope, DerivationPath
+from embit.ec import PublicKey
 
 from seedsigner.helpers import musig2 as m
 from seedsigner.helpers import musig2_psbt as mp
@@ -40,202 +23,227 @@ def data():
 
 
 @pytest.fixture(scope="module")
-def root(data):
-    return bip32.HDKey.from_seed(bip39.mnemonic_to_seed(data["mnemonics"]["B"]))
+def roots(data):
+    return {n: bip32.HDKey.from_seed(bip39.mnemonic_to_seed(data["mnemonics"][n])) for n in "ABC"}
 
 
-def roles(data, root, which="psbt_round_one"):
-    return mp.roles_for_root(PSBT.from_string(data[which]), root)
+def without_other_nonces(psbt_b64):
+    """The captured psbt carries Core's nonce already; drop it to exercise the waiting round."""
+    psbt = PSBT.from_string(psbt_b64)
+    for scope in psbt.inputs:
+        for key in [k for k in scope.unknown if k[0] == mp.PSBT_IN_MUSIG2_PUB_NONCE]:
+            del scope.unknown[key]
+    return psbt
 
 
-def keypath_role(data, root, which="psbt_round_one"):
-    return next(r for r in roles(data, root, which) if r.is_keypath)
+@pytest.fixture
+def psbt(data):
+    return without_other_nonces(data["psbt_round_one"])
 
 
-def test_finds_every_aggregate_this_seed_belongs_to(data, root):
-    """In a 2-of-3 the same seed sits in the key path pair and in a leaf, so
-    finding one role and stopping would look like success."""
-    found = roles(data, root)
-    assert len(found) == data["expected"]["roles"]
-    assert sum(1 for r in found if r.is_keypath) == 1
-    assert sum(1 for r in found if not r.is_keypath) == 1
+def role_of(psbt, root):
+    keypath, _ = mp.roles(psbt, root)
+    return keypath[0]
 
 
-def test_role_matches_what_core_encoded(data, root):
-    role = keypath_role(data, root)
-    expected = data["expected"]
-    assert role.agg_id.hex() == expected["keypath_agg_id"]
-    assert [p.hex() for p in role.participants] == expected["participants"]
-    assert role.my_index == expected["my_index"]
-    assert role.my_derivation == expected["my_derivation"]
-    assert [t.hex() for t in role.tweaks] == expected["tweaks"]
-    assert role.is_xonly == expected["is_xonly"]
+def core_nonce(data, role):
+    """Core's (signer A's) public nonce, taken from the fixture that carries both nonces."""
+    both = PSBT.from_string(data["psbt_both_nonces"])
+    other = next(pk for pk in role.aggregate.participants if pk != role.pubkey)
+    return other, both.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, other)]
 
 
-def test_participant_order_is_the_sorted_one_not_the_written_one(data, root):
-    """BIP-390 sorts, so this is a live example of the trap rather than a
-    hypothetical one."""
-    role = keypath_role(data, root)
-    assert role.participants == sorted(role.participants)
+# --- reading -------------------------------------------------------------------------
+
+def test_the_arrangement_is_read_from_the_psbt(psbt, roots, data):
+    keypath, leaves = mp.roles(psbt, roots["B"])
+    assert len(keypath) == 1 and leaves == 1
+    role = keypath[0]
+    e = data["expected"]
+    assert role.aggregate.key.hex() == e["keypath_agg_id"]
+    assert [pk.hex() for pk in role.aggregate.participants] == e["participants"]
+    assert role.aggregate.participants.index(role.pubkey) == e["my_index"]
+    assert role.derivation == e["my_derivation"]
+    assert [t.hex() for t in role.aggregate.tweaks] == e["tweaks"]
+    assert role.aggregate.is_xonly == e["is_xonly"]
+    assert mp.sighash(psbt, role).hex() == e["sighash"]
 
 
-def test_an_odd_parity_participant_key_is_still_recognised(data, root):
-    """A taproot derivation stores 32 bytes and cannot say which of the two
-    points it means, while the participant list carries a real parity byte. Half
-    of all keys are odd, so matching 33 against 33 finds nothing for half the
-    seeds that should have matched, and finds it silently. This fixture's seed
-    is one of the odd ones, which is the only reason the bug was ever seen."""
-    role = keypath_role(data, root)
-    assert role.my_pubkey[0] == 0x03, "the fixture no longer exercises odd parity"
-    assert role.my_pubkey[1:] in [
-        pub.xonly()
-        for pub in PSBT.from_string(data["psbt_round_one"]).inputs[0].taproot_bip32_derivations
-    ]
+def test_a_seed_outside_the_arrangement_has_no_role(psbt):
+    stranger = bip32.HDKey.from_seed(os.urandom(64))
+    assert mp.roles(psbt, stranger) == ([], 0)
 
 
-def test_the_wallet_recognises_the_input_as_its_own(data):
-    """What decides whether the review screen shows the seed or a shrug. MuSig2
-    participants appear as ordinary taproot derivations, so the existing check
-    works, but nothing said so until it was run."""
-    from seedsigner.models.psbt_parser import PSBTParser
-    from seedsigner.models.seed import Seed
-    from seedsigner.models.settings_definition import SettingsConstants
-
-    seed = Seed(mnemonic=data["mnemonics"]["B"].split())
-    assert PSBTParser.has_matching_input_fingerprint(
-        PSBT.from_string(data["psbt_round_one"]), seed,
-        network=SettingsConstants.REGTEST)
+def test_the_third_seed_is_only_in_leaves(psbt, roots):
+    keypath, leaves = mp.roles(psbt, roots["C"])
+    assert keypath == [] and leaves == 2
 
 
-def test_our_key_derives_from_the_seed(data, root):
-    role = keypath_role(data, root)
-    sk = root.derive(role.my_derivation).key.secret
-    assert m.individual_pk(sk) == role.my_pubkey
+def _participants_field(psbt):
+    scope = psbt.inputs[0]
+    return next(k for k in scope.unknown if k[0] == mp.PSBT_IN_MUSIG2_PARTICIPANT_PUBKEYS)
 
 
-def test_the_aggregate_key_locks_the_coin(data, root):
+@pytest.mark.parametrize("tamper", ["truncate", "empty", "swap_key", "not_a_point", "no_derivation"])
+def test_malformed_fields_are_refused_not_crashed(psbt, roots, tamper):
+    scope = psbt.inputs[0]
+    key = _participants_field(psbt)
+    if tamper == "truncate":
+        scope.unknown[key] = scope.unknown[key][:65]
+    elif tamper == "empty":
+        scope.unknown[key] = b""
+    elif tamper == "swap_key":
+        blob = scope.unknown[key]
+        scope.unknown[key] = m.individual_pk(os.urandom(32)) + blob[33:]
+    elif tamper == "not_a_point":
+        scope.unknown[key] = b"\x02" + b"\xff" * 32 + scope.unknown[key][33:]
+    elif tamper == "no_derivation":
+        fingerprint = mp.hash160(key[1:])[:4]
+        for pub in [p for p, (_, der) in scope.taproot_bip32_derivations.items()
+                    if der.fingerprint == fingerprint]:
+            del scope.taproot_bip32_derivations[pub]
+    with pytest.raises(mp.Musig2Error):
+        mp.roles(psbt, roots["B"])
+
+
+def test_hardened_derivation_of_an_aggregate_is_refused():
+    with pytest.raises(mp.Musig2Error):
+        mp._derive(m.individual_pk(os.urandom(32)), [mp.HARDENED])
+
+
+# --- the coin ------------------------------------------------------------------------
+
+def test_the_aggregate_must_lock_the_coin(psbt, roots):
+    role = role_of(psbt, roots["B"])
+    mp.check_coin(psbt, role)
+    spk = bytearray(psbt.inputs[0].utxo.script_pubkey.data)
+    spk[-1] ^= 1
+    psbt.inputs[0].utxo.script_pubkey.data = bytes(spk)
+    with pytest.raises(mp.Musig2Error):
+        mp.check_coin(psbt, role)
+
+
+def test_a_changed_merkle_root_changes_the_key_and_fails_the_coin(psbt, roots):
+    psbt.inputs[0].taproot_merkle_root = os.urandom(32)
+    with pytest.raises(mp.Musig2Error):
+        mp.check_coin(psbt, role_of(psbt, roots["B"]))
+
+
+def test_the_policy_is_proven_from_the_tree(psbt, roots):
+    assert str(mp.policy(psbt, role_of(psbt, roots["B"]))) == "2 of 3"
+
+
+def test_a_tampered_leaf_gives_no_policy(psbt, roots):
+    scope = psbt.inputs[0]
+    control_block = next(iter(scope.taproot_scripts))
+    value = bytearray(scope.taproot_scripts[control_block])
+    value[5] ^= 1
+    scope.taproot_scripts[control_block] = bytes(value)
+    assert mp.policy(psbt, role_of(psbt, roots["B"])) is None
+
+
+def test_no_internal_key_gives_no_policy(psbt, roots):
+    psbt.inputs[0].taproot_internal_key = None
+    assert mp.policy(psbt, role_of(psbt, roots["B"])) is None
+
+
+# --- the rounds ----------------------------------------------------------------------
+
+def test_the_first_pass_publishes_a_nonce_and_signs_nothing(psbt, roots):
+    session = mp.Session()
+    progress = session.advance(psbt, roots["B"])
+    assert progress == mp.Progress(mp.NONCE, 0, 1, 1)
+    role = role_of(psbt, roots["B"])
+    assert mp.pubnonces(psbt, role).count(None) == 1
+    assert mp.partial_sig(psbt, role) is None
+    assert len(session) == 1
+
+
+def test_the_last_signer_signs_in_one_pass(data, roots):
+    """With every other nonce already present there is nothing to wait for."""
     psbt = PSBT.from_string(data["psbt_round_one"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    mp.verify_against_utxo(psbt, role)
+    session = mp.Session()
+    assert session.advance(psbt, roots["B"]) == mp.Progress(mp.SIGNED, 1, 0, 1)
+    assert mp.partial_sig(psbt, role_of(psbt, roots["B"])) is not None
+    assert len(session) == 0
 
 
-def test_a_swapped_utxo_is_caught(data, root):
-    """The check that matters: MuSig2 fields describing a different arrangement
-    from the one holding the money."""
-    psbt = PSBT.from_string(data["psbt_round_one"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    tampered = copy.deepcopy(psbt)
-    spk = tampered.inputs[role.input_index].witness_utxo.script_pubkey
-    spk.data = spk.data[:2] + bytes(32)
-    with pytest.raises(mp.Musig2Error, match="does not lock this coin"):
-        mp.verify_against_utxo(tampered, role)
+def test_a_rescan_republishes_the_same_nonce(data, roots):
+    session = mp.Session()
+    first = without_other_nonces(data["psbt_round_one"])
+    session.advance(first, roots["B"])
+    again = without_other_nonces(data["psbt_round_one"])
+    session.advance(again, roots["B"])
+    role = role_of(again, roots["B"])
+    ours = role.aggregate.participants.index(role.pubkey)
+    assert mp.pubnonces(again, role)[ours] == mp.pubnonces(first, role)[ours]
+    assert len(session) == 1
 
 
-def test_sighash(data, root):
-    psbt = PSBT.from_string(data["psbt_round_one"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    assert mp.sighash_for(psbt, role).hex() == data["expected"]["sighash"]
+def test_the_second_pass_signs_and_destroys_the_nonce(data, psbt, roots):
+    session = mp.Session()
+    session.advance(psbt, roots["B"])
+    role = role_of(psbt, roots["B"])
+    other, nonce = core_nonce(data, role)
+    psbt.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, other)] = nonce
+
+    progress = session.advance(psbt, roots["B"])
+    assert progress == mp.Progress(mp.SIGNED, 1, 0, 1)
+    assert len(session) == 0
+    agg = role.aggregate
+    assert m.partial_sig_verify(mp.partial_sig(psbt, role), mp.pubnonces(psbt, role), agg.participants,
+                                agg.tweaks, agg.is_xonly, mp.sighash(psbt, role),
+                                agg.participants.index(role.pubkey))
 
 
-def test_leaf_signing_is_refused_rather_than_skipped(data, root):
-    psbt = PSBT.from_string(data["psbt_round_one"])
-    leaf = next(r for r in mp.roles_for_root(psbt, root) if not r.is_keypath)
-    with pytest.raises(mp.Musig2Error, match="not supported yet"):
-        mp.sighash_for(psbt, leaf)
+def test_a_signed_psbt_is_verified_and_never_signed_again(data, psbt, roots):
+    session = mp.Session()
+    session.advance(psbt, roots["B"])
+    role = role_of(psbt, roots["B"])
+    other, nonce = core_nonce(data, role)
+    psbt.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, other)] = nonce
+    session.advance(psbt, roots["B"])
+    before = dict(psbt.inputs[0].unknown)
+
+    assert session.advance(psbt, roots["B"]) == mp.Progress(mp.SIGNED, 1, 0, 1)
+    assert dict(psbt.inputs[0].unknown) == before
+
+    mp.write_partial_sig(psbt, role, bytes(32))
+    with pytest.raises(mp.Musig2Error):
+        session.advance(psbt, roots["B"])
 
 
-def test_an_unfinished_first_round_reads_as_unfinished(data, root):
-    """Not an error: it is the state the device shows a round-one screen for."""
-    psbt = PSBT.from_string(data["psbt_round_one"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    assert mp.pubnonces(psbt, role) is None
+def test_a_different_transaction_gets_a_different_nonce(data, roots):
+    session = mp.Session()
+    one = without_other_nonces(data["psbt_round_one"])
+    two = without_other_nonces(data["psbt_round_one"])
+    two.outputs[0].value -= 1
+    session.advance(one, roots["B"])
+    session.advance(two, roots["B"])
+    role = role_of(one, roots["B"])
+    ours = role.aggregate.participants.index(role.pubkey)
+    assert mp.pubnonces(one, role)[ours] != mp.pubnonces(two, role_of(two, roots["B"]))[ours]
+    assert len(session) == 2
 
 
-def test_a_finished_first_round_yields_nonces_in_aggregation_order(data, root):
-    psbt = PSBT.from_string(data["psbt_both_nonces"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    collected = mp.pubnonces(psbt, role)
-    assert collected is not None and len(collected) == len(role.participants)
-    assert all(len(n) == 66 for n in collected)
+def test_clear_wipes_every_secret_nonce(psbt, roots):
+    session = mp.Session()
+    session.advance(psbt, roots["B"])
+    held = list(session._nonces.values())
+    session.clear()
+    assert len(session) == 0
+    assert all(bytes(n) == bytes(len(n)) for n in held)
 
 
-def test_written_fields_survive_a_serialize_round_trip(data, root):
-    psbt = PSBT.from_string(data["psbt_round_one"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    mp.write_pubnonce(psbt, role, b"\x02" + bytes(32) + b"\x03" + bytes(32))
-    mp.write_partial_sig(psbt, role, bytes(range(32)))
-
-    again = PSBT.from_string(str(psbt))
-    role2 = next(r for r in mp.roles_for_root(again, root) if r.is_keypath)
-    fields = mp.scope_fields(again.inputs[role2.input_index], mp.FIELD_PARTIAL_SIG)
-    assert fields[role2.my_pubkey + role2.agg_id] == bytes(range(32))
+def test_a_seed_that_also_owns_an_ordinary_input_is_refused(psbt, roots):
+    plain = InputScope()
+    pub = PublicKey.parse(m.individual_pk(os.urandom(32)))
+    plain.bip32_derivations[pub] = DerivationPath(roots["B"].my_fingerprint, [0])
+    psbt.inputs.append(plain)
+    with pytest.raises(mp.Musig2Error, match="Mixed"):
+        mp.Session().advance(psbt, roots["B"])
 
 
-def test_we_accept_cores_partial_signature(data, root):
-    """The cross-check, in the direction that is easy to forget: our code
-    validating theirs."""
-    psbt = PSBT.from_string(data["psbt_both_nonces"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    collected = mp.pubnonces(psbt, role)
-    msg = mp.sighash_for(psbt, role)
-
-    sigs = mp.scope_fields(psbt.inputs[role.input_index], mp.FIELD_PARTIAL_SIG)
-    theirs = {pk: sigs[pk + role.agg_id] for pk in role.participants
-              if pk + role.agg_id in sigs}
-    assert theirs, "the fixture carries no partial signature from Core"
-
-    for pubkey, psig in theirs.items():
-        assert m.partial_sig_verify(psig, collected, role.participants, role.tweaks,
-                                    role.is_xonly, msg,
-                                    role.participants.index(pubkey))
-
-
-def test_the_broadcast_transaction_carries_a_valid_signature(data, root):
-    """End to end, with no node: one 64-byte witness item, and it verifies as an
-    ordinary single-signer taproot signature for the aggregate key."""
-    psbt = PSBT.from_string(data["psbt_both_nonces"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    msg = mp.sighash_for(psbt, role)
-    output_key = psbt.inputs[role.input_index].utxo.script_pubkey.data[2:]
-
-    tx = Transaction.from_string(data["final_tx_hex"])
-    witness = tx.vin[role.input_index].witness.items
-    assert len(witness) == 1, "not a key path spend"
-    assert len(witness[0]) == 64, "not SIGHASH_DEFAULT"
-
-    signature = ec.SchnorrSig.parse(witness[0])
-    assert ec.PublicKey.from_xonly(output_key).schnorr_verify(signature, msg)
-
-
-def test_the_policy_is_recovered_and_proven_against_the_coin(data, root):
-    """A taproot output key commits to the whole arrangement, so the policy can
-    be recovered from the transaction and then checked against the coin holding
-    the money. That is stronger than reading it off a wallet file: the file says
-    what someone wrote down, this says what the coin will accept."""
-    psbt = PSBT.from_string(data["psbt_round_one"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    policy = mp.verify_policy(psbt, role)
-    assert policy is not None
-    assert (policy.threshold, policy.total) == (2, 3)
-    assert str(policy) == "2 of 3"
-
-
-def test_a_tampered_leaf_yields_no_policy_rather_than_a_wrong_one(data, root):
-    """The whole reason to check against the coin. A screen confidently showing
-    the wrong threshold is worse than one showing none."""
-    psbt = PSBT.from_string(data["psbt_round_one"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    scope = psbt.inputs[role.input_index]
-
-    control_block, value = next(iter(scope.taproot_scripts.items()))
-    raw = bytes(value)
-    scope.taproot_scripts[control_block] = raw[:1] + bytes([raw[1] ^ 0x01]) + raw[2:]
-    assert mp.verify_policy(psbt, role) is None
-
-
-def test_a_swapped_coin_yields_no_policy(data, root):
-    psbt = PSBT.from_string(data["psbt_round_one"])
-    role = next(r for r in mp.roles_for_root(psbt, root) if r.is_keypath)
-    spk = psbt.inputs[role.input_index].witness_utxo.script_pubkey
-    spk.data = spk.data[:2] + bytes(32)
-    assert mp.verify_policy(psbt, role) is None
+def test_a_seed_with_no_role_is_refused(psbt):
+    with pytest.raises(mp.Musig2Error):
+        mp.Session().advance(psbt, bip32.HDKey.from_seed(os.urandom(64)))

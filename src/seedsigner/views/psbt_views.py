@@ -1310,9 +1310,7 @@ class PSBTFinalizeView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        # MuSig2 does not produce a signature the counting below can see, and on
-        # the first of its two rounds it does not produce one at all. Branch
-        # before any of that rather than teaching it about a second scheme.
+        # MuSig2 signs in rounds and the first one produces no signature to count
         if not self.controller.psbt_sign_with_satochip:
             from seedsigner.helpers import musig2_psbt
             if musig2_psbt.has_musig2_fields(psbt):
@@ -1448,86 +1446,50 @@ class PSBTFinalizeView(View):
 
 
 class PSBTMusig2RoundView(View):
-    """One MuSig2 round, on whichever round the transaction is ready for.
-
-    Signing is two passes and the device cannot shorten that. The first pass
-    produces no signature at all, which is a normal outcome and has to look like
-    one: a screen that says "signed" after it would be a lie, and one that says
-    "failed" would send the owner round again for no reason.
-
-    The secret nonce between the two lives in memory on the Controller and
-    nowhere else. Power the device off between rounds and the attempt fails,
-    which is the correct failure rather than a lost key.
+    """
+    One MuSig2 round. The first round produces no signature, and the screen says so
+    rather than reporting a failure. The secret nonce between rounds lives on the
+    Controller, in memory only.
     """
 
     def run(self):
-        from seedsigner.helpers import musig2_psbt, musig2_session
+        from seedsigner.helpers import musig2_psbt
 
         psbt = self.controller.psbt
-        psbt_parser: PSBTParser = self.controller.psbt_parser
+        root = self.controller.psbt_parser.root
+        if self.controller.musig2_session is None:
+            self.controller.musig2_session = musig2_psbt.Session()
 
-        session = getattr(self.controller, "musig2_session", None)
-        if session is None:
-            session = musig2_session.Musig2Session()
-            self.controller.musig2_session = session
-
-        roles = [r for r in musig2_psbt.roles_for_root(psbt, psbt_parser.root)
-                 if r.is_keypath]
         try:
-            progress = musig2_session.advance(psbt, psbt_parser.root, session)
+            progress = self.controller.musig2_session.advance(psbt, root)
+            policy = musig2_psbt.policy(psbt, musig2_psbt.roles(psbt, root)[0][0])
         except musig2_psbt.Musig2Error as e:
             logger.info("PSBTMusig2Round: refused: %s", e)
             self.run_screen(
                 WarningScreen,
                 title=_("MuSig2"),
-                status_headline=None,
+                status_headline=_("Cannot sign"),
                 text=str(e),
                 show_back_button=False,
                 button_data=[ButtonOption(_("Done"))],
             )
             return Destination(MainMenuView, clear_history=True)
 
-        logger.info(
-            "PSBTMusig2Round: stage=%s signed=%d waiting=%d leaves_skipped=%d",
-            progress.stage, progress.signed_inputs, progress.waiting_inputs,
-            progress.skipped_leaves,
-        )
+        logger.info("PSBTMusig2Round: stage=%s signed=%d waiting=%d leaves=%d",
+                    progress.stage, progress.signed, progress.waiting, progress.leaves)
 
-        # What the arrangement actually permits, recovered from the transaction
-        # and checked against the coin being spent rather than read off a wallet
-        # file the device does not have. Nothing is shown when it cannot be
-        # proven: a wrong "2 of 3" is worse than no number.
-        policy = None
-        try:
-            policy = musig2_psbt.verify_policy(psbt, roles[0])
-        except Exception as e:
-            logger.info("PSBTMusig2Round: policy not established: %s", e)
-        title = _("MuSig2 {policy}").format(policy=policy) if policy else _("MuSig2")
-
-        # No "nonce" and no "partial signature". The owner of a 2-of-3 has two
-        # things to act on: nothing is signed yet, and they have to come back
-        # once the others have been. Naming the cryptography instead buries both.
-        #
-        # A silent payment adds a step in front: the recipient's output is
-        # worked out from every signer's share before there is anything to sign.
-        from seedsigner.helpers import musig2_sp
-        steps = 3 if musig2_sp.scan_keys(psbt) else 2
-        if progress.stage == musig2_session.SHARES:
-            headline = _("Step 1 of 3")
-            text = _("Not signed yet. Every signer's share builds the output "
-                     "first. Send this back, then scan it again.")
-        elif progress.stage == musig2_session.ROUND_ONE:
-            headline = _("Step {n} of {steps}").format(n=steps - 1, steps=steps)
-            text = _("Not signed yet. Send this back, then scan it again once "
-                     "the other signers have taken their turn.")
+        steps = 3 if musig2_psbt.sp_scan_keys(psbt) else 2
+        if progress.stage == musig2_psbt.SIGNED:
+            step, text = steps, _("Signed. Send this back to finish.")
+        elif progress.stage == musig2_psbt.NONCE:
+            step, text = steps - 1, _("Not signed yet. Send this back, then scan it again.")
         else:
-            headline = _("Step {n} of {steps}").format(n=steps, steps=steps)
-            text = _("Signed. Send this back to finish the transaction.")
+            step, text = 1, _("Not signed yet. Send this back, then scan it again.")
 
         self.run_screen(
             LargeIconStatusScreen,
-            title=title,
-            status_headline=headline,
+            title=_("MuSig2 {policy}").format(policy=policy) if policy else _("MuSig2"),
+            status_headline=_("Step {n} of {steps}").format(n=step, steps=steps),
             text=text,
             show_back_button=False,
             button_data=[ButtonOption(_("Continue"))],

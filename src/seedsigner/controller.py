@@ -262,6 +262,9 @@ class Controller(Singleton):
     # Survives the idle wipe on purpose: a date is not a secret, and quietly forgetting it would
     # turn verified proofs into unverifiable ones with nothing on screen to explain why.
     timecode_offset: float | None = None
+
+    # MuSig2 secret nonces between rounds; survives the trip home between scans, dies on wipe
+    musig2_session = None
     sign_message_with_satochip: bool = False
 
     unverified_address = None
@@ -766,6 +769,9 @@ class Controller(Singleton):
         self.psbt_sign_with_satochip = False
         self.sign_message_with_satochip = False
         self.multisig_wallet_descriptor = None
+        if self.musig2_session is not None:
+            self.musig2_session.clear()
+            self.musig2_session = None
         self.unverified_address = None
         self.address_explorer_data = None
         self.sign_message_data = None

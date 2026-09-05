@@ -1,29 +1,13 @@
-"""MuSig2 (BIP-327), ported for the device.
+"""MuSig2 (BIP-327): the specification's reference algorithms, on embit's curve arithmetic.
 
-The algorithms below are BIP-327's reference implementation, kept line-for-line
-comparable to the specification so that the two can be diffed by eye. Only two
-things were changed, both deliberate:
-
-  * the point arithmetic is embit's `SECP256K1` rather than the specification's
-    own naive double-and-add. That is a measured 30x, and it is the difference
-    between a partial signature the device produces in tens of milliseconds and
-    one that takes over a second. embit's is the same curve code the wallet
-    already trusts for every other signature it makes.
-  * the parts only a coordinator needs are not here: `partial_sig_agg` combines
-    the fragments and `deterministic_sign` is a one-round variant for whoever
-    signs last. The device is a participant, never the coordinator, so neither
-    belongs on it.
-
-Nonce reuse leaks the private key. There is no gentler way to put it: signing
-twice with one secnonce over two different messages lets anyone subtract out the
-key. `partial_sign` therefore zeroes the secnonce it was handed, and refuses one
-that is already zero, exactly as the specification requires. The caller must
-hold a secnonce in memory and never write it anywhere that survives a power cut.
+The device is a participant, never the coordinator, so PartialSigAgg and DeterministicSign
+are not here. `sign` zeroes the secnonce it is handed and refuses one that is already zero,
+as the specification requires: signing twice with one secnonce leaks the private key.
 """
 
 from typing import List, NamedTuple, Optional, Tuple
 
-from embit.hashes import sha256, tagged_hash
+from embit.hashes import tagged_hash
 from embit.util.key import SECP256K1, SECP256K1_G, SECP256K1_ORDER as n
 
 Point = Tuple[int, int]
@@ -422,8 +406,6 @@ def partial_sig_verify_internal(psig: bytes, pubnonce: bytes, pk: bytes,
     Re_s_ = point_add(R_s1, point_mul(R_s2, b))
     Re_s = Re_s_ if has_even_y(R) else point_negate(Re_s_)
     P = cpoint(pk)
-    if P is None:
-        return False
     a = get_session_key_agg_coeff(session_ctx, P)
     g = 1 if has_even_y(Q) else n - 1
     g_ = g * gacc % n
