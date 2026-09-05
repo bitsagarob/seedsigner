@@ -114,3 +114,50 @@ class TestMusig2Flows(FlowTest):
         assert musig2_psbt.pubnonces(psbt, role).count(None) == 2
         assert musig2_psbt.sp_scripts_missing(psbt)
         assert len(self.controller.musig2_session) == 0
+
+    def test_an_open_card_holding_this_seed_holds_the_nonce(self):
+        """The view decides between the card and memory. Deciding by truthiness there
+        drops the card without a word, because a session with no nonces yet is falsy."""
+        from test_musig2_card import FakeCardWithSecrets
+        from seedsigner.helpers import musig2_card
+        # The Controller drops the smartcard session every time it returns Home unless
+        # this is enabled, and it is off by default. Without it the connector is gone
+        # before signing starts and the vault can never engage.
+        Settings.get_instance().set_value(SettingsConstants.SETTING__CACHE_SCARD_PIN,
+                                          SettingsConstants.OPTION__ENABLED)
+        root = self.seed.get_root(SettingsConstants.REGTEST)
+        card = FakeCardWithSecrets(root, {1: root})
+        self.controller.Satochip_Connector = card
+
+        self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2RoundView),
+            FlowStep(psbt_views.PSBTSignedQRDisplayView),
+        ]))
+        assert isinstance(self.controller.musig2_session, musig2_card.CardSession)
+        assert card.generated == 1, "the round ran without asking the card for a nonce"
+
+    def test_without_a_card_the_nonce_stays_in_memory(self):
+        from seedsigner.helpers import musig2_psbt
+        self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2RoundView),
+            FlowStep(psbt_views.PSBTSignedQRDisplayView),
+        ]))
+        session = self.controller.musig2_session
+        assert type(session) is musig2_psbt.Session
+
+    def test_a_card_session_dropped_at_the_main_menu_falls_back(self):
+        """Cache Smartcard Pin is off by default, and the Controller then clears the
+        connector on the way Home. The signing flow starts at Home, so the card is
+        already gone: the vault silently does not engage. This is the default device."""
+        from test_musig2_card import FakeCardWithSecrets
+        from seedsigner.helpers import musig2_psbt
+        root = self.seed.get_root(SettingsConstants.REGTEST)
+        card = FakeCardWithSecrets(root, {1: root})
+        self.controller.Satochip_Connector = card
+
+        self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2RoundView),
+            FlowStep(psbt_views.PSBTSignedQRDisplayView),
+        ]))
+        assert type(self.controller.musig2_session) is musig2_psbt.Session
+        assert card.generated == 0

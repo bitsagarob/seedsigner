@@ -278,3 +278,9 @@ def test_selecting_never_opens_a_reader(roots, monkeypatch):
 
     monkeypatch.setattr(seedkeeper_utils, "init_satochip", refuse)
     assert mc.select(Controller(), roots["B"]) is None
+
+
+def test_a_card_session_is_truthy(roots):
+    """Session defines __len__, so an empty one is falsy and `select(...) or Session()`
+    throws the card away. Anything that decides between the two must test for None."""
+    assert bool(mc.CardSession(FakeCard(roots["B"]), sid=1)) is True

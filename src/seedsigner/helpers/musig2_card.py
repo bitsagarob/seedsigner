@@ -108,6 +108,15 @@ class CardSession(mp.Session):
         self._connector = connector
         self._sid = sid
 
+    def __bool__(self) -> bool:
+        """A session exists whether or not it is holding a nonce yet.
+
+        Session defines __len__, so without this a freshly built one is falsy and
+        `card_session or Session()` quietly discards the card. That is not a
+        hypothetical: it shipped in the first version of the selection above.
+        """
+        return True
+
     # --- the seam ----------------------------------------------------------------------
 
     def new_nonce(self, psbt, role: mp.Role, msg: bytes, secret: bytearray):

@@ -1430,8 +1430,13 @@ class PSBTMusig2RoundView(View):
             # instead of memory, which is what lets the device be switched off between
             # the rounds. Nothing here opens a reader or asks for a PIN, so a signing
             # that has no card behind it is unaffected.
-            self.controller.musig2_session = (
-                musig2_card.select(self.controller, root) or musig2_psbt.Session())
+            # Tested against None rather than for truthiness: Session defines __len__ and
+            # so a session holding no nonces yet is falsy, which would throw a perfectly
+            # good card session away and fall back to memory without a word.
+            session = musig2_card.select(self.controller, root)
+            if session is None:
+                session = musig2_psbt.Session()
+            self.controller.musig2_session = session
 
         try:
             progress = self.controller.musig2_session.advance(psbt, root)
