@@ -60,6 +60,8 @@ class TestMusig2Flows(FlowTest):
     def test_round_one_publishes_a_nonce_and_says_so(self):
         from seedsigner.helpers import musig2_psbt
         self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView,
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.CONTINUE),
             FlowStep(psbt_views.PSBTMusig2RoundView),
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
@@ -71,9 +73,13 @@ class TestMusig2Flows(FlowTest):
     def test_round_two_signs(self):
         from seedsigner.helpers import musig2_psbt
         self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView,
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.CONTINUE),
             FlowStep(psbt_views.PSBTMusig2RoundView),
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
+        # The offer is not shown again: this device never lost the session it made
+        # in round one, so it has already been asked and answered.
         self.run_sequence(self._walk(self.data["psbt_round_one"], [
             FlowStep(psbt_views.PSBTMusig2RoundView),
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
@@ -89,6 +95,8 @@ class TestMusig2Flows(FlowTest):
         key = next(k for k in scope.unknown if k[0] == musig2_psbt.PSBT_IN_MUSIG2_PARTICIPANT_PUBKEYS)
         scope.unknown[key] = scope.unknown[key][:65]
         self.run_sequence(self._walk(psbt.to_string(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView,
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.CONTINUE),
             FlowStep(psbt_views.PSBTMusig2RoundView, screen_return_value=0),
             FlowStep(MainMenuView),
         ]))
@@ -104,6 +112,8 @@ class TestMusig2Flows(FlowTest):
             bip39.mnemonic_to_seed(self.data["mnemonics"]["C"]), SettingsConstants.REGTEST)
         # Framed as a coordinator sends it; the bare-base64 detector cannot read a v2 send
         self.run_sequence(self._walk("p1of1 " + silent_send(self.data, recipient).to_string(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView,
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.CONTINUE),
             FlowStep(psbt_views.PSBTMusig2RoundView),
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
@@ -115,49 +125,69 @@ class TestMusig2Flows(FlowTest):
         assert musig2_psbt.sp_scripts_missing(psbt)
         assert len(self.controller.musig2_session) == 0
 
-    def test_an_open_card_holding_this_seed_holds_the_nonce(self):
-        """The view decides between the card and memory. Deciding by truthiness there
-        drops the card without a word, because a session with no nonces yet is falsy."""
+    def _offer_a_card(self, monkeypatch, card):
+        """Put a card behind the offer screen without a reader in the room."""
+        from seedsigner.helpers import seedkeeper_utils
+        monkeypatch.setattr(seedkeeper_utils, "init_satochip", lambda *a, **k: card)
+
+    def test_choosing_the_card_puts_the_nonce_on_it(self, monkeypatch):
         from test_musig2_card import FakeCardWithSecrets
         from seedsigner.helpers import musig2_card
-        # The Controller drops the smartcard session every time it returns Home unless
-        # this is enabled, and it is off by default. Without it the connector is gone
-        # before signing starts and the vault can never engage.
-        Settings.get_instance().set_value(SettingsConstants.SETTING__CACHE_SCARD_PIN,
-                                          SettingsConstants.OPTION__ENABLED)
         root = self.seed.get_root(SettingsConstants.REGTEST)
         card = FakeCardWithSecrets(root, {1: root})
-        self.controller.Satochip_Connector = card
+        self._offer_a_card(monkeypatch, card)
 
         self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView,
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.USE_CARD),
             FlowStep(psbt_views.PSBTMusig2RoundView),
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
         assert isinstance(self.controller.musig2_session, musig2_card.CardSession)
         assert card.generated == 1, "the round ran without asking the card for a nonce"
 
-    def test_without_a_card_the_nonce_stays_in_memory(self):
-        from seedsigner.helpers import musig2_psbt
-        self.run_sequence(self._walk(self._without_other_nonces(), [
-            FlowStep(psbt_views.PSBTMusig2RoundView),
-            FlowStep(psbt_views.PSBTSignedQRDisplayView),
-        ]))
-        session = self.controller.musig2_session
-        assert type(session) is musig2_psbt.Session
-
-    def test_a_card_session_dropped_at_the_main_menu_falls_back(self):
-        """Cache Smartcard Pin is off by default, and the Controller then clears the
-        connector on the way Home. The signing flow starts at Home, so the card is
-        already gone: the vault silently does not engage. This is the default device."""
+    def test_declining_keeps_the_nonce_in_memory(self, monkeypatch):
         from test_musig2_card import FakeCardWithSecrets
         from seedsigner.helpers import musig2_psbt
         root = self.seed.get_root(SettingsConstants.REGTEST)
         card = FakeCardWithSecrets(root, {1: root})
-        self.controller.Satochip_Connector = card
+        self._offer_a_card(monkeypatch, card)
 
         self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView,
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.CONTINUE),
+            FlowStep(psbt_views.PSBTMusig2RoundView),
+            FlowStep(psbt_views.PSBTSignedQRDisplayView),
+        ]))
+        assert type(self.controller.musig2_session) is musig2_psbt.Session
+        assert card.generated == 0, "the card was used although the offer was declined"
+
+    def test_a_card_not_holding_this_seed_says_so_and_carries_on(self, monkeypatch):
+        """A card that cannot make this nonce is told to the user, not hidden."""
+        from test_musig2_card import FakeCardWithSecrets
+        from seedsigner.helpers import musig2_psbt
+        root = self.seed.get_root(SettingsConstants.REGTEST)
+        other = self.seed.get_root(SettingsConstants.REGTEST).derive([1])
+        card = FakeCardWithSecrets(root, {1: other})
+        self._offer_a_card(monkeypatch, card)
+
+        self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView,
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.USE_CARD),
+            FlowStep(psbt_views.PSBTMusig2WrongCardView, screen_return_value=0),
             FlowStep(psbt_views.PSBTMusig2RoundView),
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
         assert type(self.controller.musig2_session) is musig2_psbt.Session
         assert card.generated == 0
+
+    def test_the_offer_is_not_made_to_someone_without_smartcards(self):
+        """Smartcards off in Settings means the question never comes up."""
+        from seedsigner.helpers import musig2_psbt
+        Settings.get_instance().set_value(SettingsConstants.SETTING__SMARTCARD_SUPPORT,
+                                          SettingsConstants.OPTION__DISABLED)
+        self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2RoundView),
+            FlowStep(psbt_views.PSBTSignedQRDisplayView),
+        ]))
+        assert type(self.controller.musig2_session) is musig2_psbt.Session
