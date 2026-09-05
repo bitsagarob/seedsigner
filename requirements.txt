@@ -9,7 +9,7 @@ embit @ https://github.com/notTanveer/embit/archive/533cd850f5f4d4f52c21dc1abae1
 # change what we build. MUST MATCH seedsigner-os/opt/external-packages/python-pydnssec-prover,
 # which is what actually ships; build.sh checks that the two agree.
 pydnssec-prover @ https://github.com/bitsagarob/pydnssec-prover/archive/df72b67f5585c4cfae779ca833db3c5c9304f625.zip
-Pillow>=10.4.0
+Pillow>=10.4.0,<12  # ST7789.py converts to "BGR;16", which Pillow 12 removed
 pyzbar @ https://github.com/seedsigner/pyzbar/archive/c3c237821c6a20b17953efe59b90df0b514a1c03.zip
 qrcode==7.3.1
 colorama==0.4.6 ; platform_system == "Windows"
