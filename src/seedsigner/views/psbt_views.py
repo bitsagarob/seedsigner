@@ -1436,12 +1436,17 @@ class PSBTMusig2CardOfferView(View):
 
     def run(self):
         button_data = [self.USE_CARD, self.CONTINUE]
+        # Not a WarningScreen. This is an offer of convenience, and that screen supplies
+        # a "Caution" title and an amber alert icon, which read as a hazard warning about
+        # the card rather than an invitation to use it. Dropping the icon also returns
+        # its height to the text, which two buttons and this sentence both need.
         selected_menu_num = self.run_screen(
-            WarningScreen,
-            # TRANSLATOR_NOTE: This signing has two steps with a wait in between
-            status_headline=_("Two Steps"),
-            text=_("This signing takes two steps. A card can hold your place so you "
-                   "can power off in between."),
+            LargeIconStatusScreen,
+            # TRANSLATOR_NOTE: Title: this signing has two steps with a wait in between
+            title=_("Two Steps"),
+            status_icon_size=0,
+            status_headline=None,
+            text=_("A card can hold your place, so you can power off between them."),
             show_back_button=True,
             button_data=button_data,
         )
