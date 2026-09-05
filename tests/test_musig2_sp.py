@@ -206,3 +206,17 @@ def test_the_review_shows_the_silent_payment_address_until_its_script_exists(dat
     # Once the script exists the parser shows the derived output; the signer checks it
     parser = PSBTParser(SilentPaymentsPSBT.parse(psbt.serialize()), seed=seed, network=SettingsConstants.REGTEST)
     assert parser.destination_addresses[0].startswith("bcrt1p")
+
+
+def test_the_microsd_loader_reads_a_silent_payment_send(data, recipient, tmp_path):
+    """The Load PSBT tool goes through the same silent payment parser as the camera."""
+    from seedsigner.models.decode_qr import DecodeQR
+    from seedsigner.models.settings import Settings
+    from embit.psbt import PSBT as StockPSBT
+    Settings.get_instance().set_value(SettingsConstants.SETTING__SILENT_PAYMENTS,
+                                      SettingsConstants.OPTION__ENABLED)
+    raw = silent_send(data, recipient).serialize()
+    with pytest.raises(Exception):
+        StockPSBT.parse(raw)
+    parsed = DecodeQR._parse_silent_payments_psbt(raw) or StockPSBT.parse(raw)
+    assert isinstance(parsed, SilentPaymentsPSBT) and mp.has_musig2_fields(parsed)

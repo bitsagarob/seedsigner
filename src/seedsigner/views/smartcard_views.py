@@ -3395,7 +3395,9 @@ class ToolsSatochipLoadPsbtView(View):
         selected_path = psbt_files[selected]
         try:
             psbt_data = selected_path.read_bytes()
-            psbt = PSBT.parse(psbt_data)
+            # A BIP-375 send or BIP-376 spend is PSBTv2 and needs the silent payment parser
+            from seedsigner.models.decode_qr import DecodeQR
+            psbt = DecodeQR._parse_silent_payments_psbt(psbt_data) or PSBT.parse(psbt_data)
         except Exception as e:
             logger.exception("Failed to load PSBT from microSD", exc_info=e)
             self.run_screen(
