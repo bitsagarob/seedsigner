@@ -1277,6 +1277,12 @@ class PSBTFinalizeView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
+        # MuSig2 signs in rounds and the first one produces no signature to count
+        if not self.controller.psbt_sign_with_satochip:
+            from seedsigner.helpers import musig2_psbt
+            if musig2_psbt.has_musig2_fields(psbt):
+                return Destination(PSBTMusig2RoundView)
+
         sig_cnt = PSBTParser.sig_count(psbt)
         logger.info(
             "PSBTFinalize: approve selected; signer_mode=%s initial_sig_count=%d inputs=%d",
@@ -1402,6 +1408,59 @@ class PSBTFinalizeView(View):
         logger.info("PSBTFinalize: signatures added; routing=PSBTSignedQRDisplayView")
         self.controller.psbt = trimmed_psbt
         self.controller.psbt_sign_with_satochip = False
+        return Destination(PSBTSignedQRDisplayView)
+
+
+
+class PSBTMusig2RoundView(View):
+    """
+    One MuSig2 round. The first round produces no signature, and the screen says so
+    rather than reporting a failure. The secret nonce between rounds lives on the
+    Controller, in memory only.
+    """
+
+    def run(self):
+        from seedsigner.helpers import musig2_psbt
+
+        psbt = self.controller.psbt
+        root = self.controller.psbt_parser.root
+        if self.controller.musig2_session is None:
+            self.controller.musig2_session = musig2_psbt.Session()
+
+        try:
+            progress = self.controller.musig2_session.advance(psbt, root)
+            policy = musig2_psbt.policy(psbt, musig2_psbt.roles(psbt, root)[0][0])
+        except musig2_psbt.Musig2Error as e:
+            logger.info("PSBTMusig2Round: refused: %s", e)
+            self.run_screen(
+                WarningScreen,
+                title=_("MuSig2"),
+                status_headline=_("Cannot sign"),
+                text=str(e),
+                show_back_button=False,
+                button_data=[ButtonOption(_("Done"))],
+            )
+            return Destination(MainMenuView, clear_history=True)
+
+        logger.info("PSBTMusig2Round: stage=%s signed=%d waiting=%d leaves=%d",
+                    progress.stage, progress.signed, progress.waiting, progress.leaves)
+
+        steps = 3 if musig2_psbt.sp_scan_keys(psbt) else 2
+        if progress.stage == musig2_psbt.SIGNED:
+            step, text = steps, _("Signed. Send this back to finish.")
+        elif progress.stage == musig2_psbt.NONCE:
+            step, text = steps - 1, _("Not signed yet. Send this back, then scan it again.")
+        else:
+            step, text = 1, _("Not signed yet. Send this back, then scan it again.")
+
+        self.run_screen(
+            LargeIconStatusScreen,
+            title=_("MuSig2 {policy}").format(policy=policy) if policy else _("MuSig2"),
+            status_headline=_("Step {n} of {steps}").format(n=step, steps=steps),
+            text=text,
+            show_back_button=False,
+            button_data=[ButtonOption(_("Continue"))],
+        )
         return Destination(PSBTSignedQRDisplayView)
 
 

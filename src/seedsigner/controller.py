@@ -253,6 +253,9 @@ class Controller(Singleton):
     # Seconds to add to the system clock, or None if no timecode QR has been scanned. Not
     # psbt_source_time, which comes from the same machine as the psbt. Survives the idle wipe.
     timecode_offset: float | None = None
+
+    # MuSig2 secret nonces between rounds; survives the trip home between scans, dies on wipe
+    musig2_session = None
     sign_message_with_satochip: bool = False
 
     unverified_address = None
@@ -757,6 +760,9 @@ class Controller(Singleton):
         self.psbt_sign_with_satochip = False
         self.sign_message_with_satochip = False
         self.multisig_wallet_descriptor = None
+        if self.musig2_session is not None:
+            self.musig2_session.clear()
+            self.musig2_session = None
         self.unverified_address = None
         self.address_explorer_data = None
         self.sign_message_data = None
