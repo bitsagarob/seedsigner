@@ -1281,6 +1281,13 @@ class PSBTFinalizeView(View):
         if not self.controller.psbt_sign_with_satochip:
             from seedsigner.helpers import musig2_psbt
             if musig2_psbt.has_musig2_fields(psbt):
+                # The offer is only worth making to someone who has smartcards turned
+                # on at all, and only before the first round: once a session exists the
+                # question has been asked and answered.
+                if (self.controller.musig2_session is None
+                        and self.settings.get_value(SettingsConstants.SETTING__SMARTCARD_SUPPORT)
+                        == SettingsConstants.OPTION__ENABLED):
+                    return Destination(PSBTMusig2CardOfferView)
                 return Destination(PSBTMusig2RoundView)
 
         sig_cnt = PSBTParser.sig_count(psbt)
@@ -1412,11 +1419,82 @@ class PSBTFinalizeView(View):
 
 
 
+class PSBTMusig2CardOfferView(View):
+    """
+        Offered once per signing, before the first round.
+
+        This kind of signing takes two steps, and something has to remember where you
+        got to. Memory forgets at power-off, so the device has to stay on; a card does
+        not, and it will only give that memory back once, which is what makes it safe
+        to hand around. The choice is here rather than in Settings because it is the
+        screen that tells the user they may put the device down, and a benefit nobody
+        is told about is not a benefit.
+    """
+    # TRANSLATOR_NOTE: Keep this signing's half-finished state on the smartcard
+    USE_CARD = ButtonOption("Use Card")
+    CONTINUE = ButtonOption("Continue")
+
+    def run(self):
+        button_data = [self.USE_CARD, self.CONTINUE]
+        # Not a WarningScreen. This is an offer of convenience, and that screen supplies
+        # a "Caution" title and an amber alert icon, which read as a hazard warning about
+        # the card rather than an invitation to use it. Dropping the icon also returns
+        # its height to the text, which two buttons and this sentence both need.
+        selected_menu_num = self.run_screen(
+            LargeIconStatusScreen,
+            # The title and headline follow PSBTMusig2RoundView, which titles its screens
+            # "MuSig2" and heads them "Step 1 of 2". Anything else would make the offer
+            # look like it came from somewhere other than the flow it belongs to.
+            title=_("MuSig2"),
+            status_icon_size=0,
+            # TRANSLATOR_NOTE: This signing has two steps with a wait in between
+            status_headline=_("Two Steps"),
+            # Body-coloured, not the green a status screen defaults to: nothing has
+            # succeeded here, a question is being asked.
+            status_color=GUIConstants.BODY_FONT_COLOR,
+            text=_("A card can hold your place, so you can power off between them."),
+            show_back_button=True,
+            button_data=button_data,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        if button_data[selected_menu_num] == self.USE_CARD:
+            from seedsigner.helpers import musig2_card, seedkeeper_utils
+
+            connector = seedkeeper_utils.init_satochip(self, init_card_filter=["seedkeeper"])
+            if connector:
+                session = musig2_card.for_seed(connector, self.controller.psbt_parser.root)
+                if session is not None:
+                    self.controller.musig2_session = session
+                else:
+                    # The card works, it just is not carrying this seed, so it cannot
+                    # hold the place. Said plainly rather than failing quietly.
+                    return Destination(PSBTMusig2WrongCardView, skip_current_view=True)
+
+        return Destination(PSBTMusig2RoundView, skip_current_view=True)
+
+
+class PSBTMusig2WrongCardView(View):
+    """The card in the reader is not holding the seed this signing needs."""
+    def run(self):
+        self.run_screen(
+            WarningScreen,
+            # TRANSLATOR_NOTE: The inserted card does not hold the seed being signed with
+            status_headline=_("Wrong Card"),
+            text=_("That card is not holding this seed. Signing continues without it."),
+            button_data=[ButtonOption("Continue")],
+        )
+        return Destination(PSBTMusig2RoundView, skip_current_view=True)
+
+
 class PSBTMusig2RoundView(View):
     """
     One MuSig2 round. The first round produces no signature, and the screen says so
     rather than reporting a failure. The secret nonce between rounds lives on the
-    Controller, in memory only.
+    Controller, in memory only, unless a card that is already open is holding this
+    seed, in which case the card holds it and releases it once.
     """
 
     def run(self):
@@ -1425,6 +1503,12 @@ class PSBTMusig2RoundView(View):
         psbt = self.controller.psbt
         root = self.controller.psbt_parser.root
         if self.controller.musig2_session is None:
+            # A card that is already open and holding this seed keeps the secret nonce
+            # instead of memory, which is what lets the device be switched off between
+            # the rounds. Nothing here opens a reader or asks for a PIN, so a signing
+            # that has no card behind it is unaffected.
+            # PSBTMusig2CardOfferView is the only place a card-backed session is made,
+            # so reaching here with none means the user was asked and said no.
             self.controller.musig2_session = musig2_psbt.Session()
 
         try:
