@@ -311,6 +311,13 @@ def test_a_spare_is_taken_instead_of_asking_the_card(psbt, roots, card, data):
     other, nonce = core_nonce(data, role)
     fresh.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, other)] = nonce
 
+    # Guard against the trap this test is most likely to rot into: if the input already
+    # carried our signature, advance() would take its "already signed" branch, never
+    # touch the card, and still report SIGNED. Then everything below would pass while
+    # measuring nothing.
+    assert mp.partial_sig(fresh, role) is None, \
+        "the input already carries our signature, so this proves nothing"
+
     before = card.generated
     progress = mc.CardSession(card, sid=1).advance(fresh, roots["B"])
 
