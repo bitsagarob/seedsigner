@@ -145,8 +145,10 @@ def test_a_device_that_lost_power_resumes_the_same_nonce(psbt, roots, card):
 
     mc.CardSession(card, sid=1).advance(psbt, roots["B"])
     again = bytes(psbt.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, role.pubkey)])
-    assert again == published
-    assert card.generated == 1, "a second nonce was burned for the same signing"
+    assert again == published, "the second visit published a different nonce"
+    # Not a counter: signing also tops up the spare supply, so the card is asked for
+    # more than one nonce in a visit. What matters is that this signing kept its own.
+    assert card.spent == set(), "the nonce was opened before there was anything to sign"
 
 
 def test_a_transaction_that_changed_does_not_resume(psbt, roots, card, data):
@@ -161,7 +163,9 @@ def test_a_transaction_that_changed_does_not_resume(psbt, roots, card, data):
     del psbt.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, role.pubkey)]
 
     mc.CardSession(card, sid=1).advance(psbt, roots["B"])
-    assert card.generated == 2, "the stale nonce was resumed for a different message"
+    fresh = bytes(psbt.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, role.pubkey)])
+    assert fresh != bytes(stored[:mc.SIZE_PUBNONCE]), \
+        "the stale nonce was resumed for a different message"
 
 
 # --- round two -----------------------------------------------------------------------
@@ -284,3 +288,69 @@ def test_a_card_session_is_truthy(roots):
     """Session defines __len__, so an empty one is falsy and `select(...) or Session()`
     throws the card away. Anything that decides between the two must test for None."""
     assert bool(mc.CardSession(FakeCard(roots["B"]), sid=1)) is True
+
+
+# --- the spare supply, which is what removes the extra visit -------------------------
+
+def test_signing_leaves_a_full_supply_behind(psbt, roots, session, card):
+    session.advance(psbt, roots["B"])
+    role = role_of(psbt, roots["B"])
+    assert len(mc._spares(psbt, role)) == mc.SPARE_NONCES
+
+
+def test_a_spare_is_taken_instead_of_asking_the_card(psbt, roots, card, data):
+    """The coordinator brought a nonce, so this signing does not need to make one."""
+    mc.CardSession(card, sid=1).advance(psbt, roots["B"])
+    role = role_of(psbt, roots["B"])
+
+    # A second transaction arrives carrying one of the spares, as a coordinator holding
+    # the supply would build it. Everything else about it is new.
+    fresh = without_other_nonces(data["psbt_round_one"])
+    spare_key = mc._spares(psbt, role)[0]
+    fresh.inputs[0].unknown[spare_key] = psbt.inputs[0].unknown[spare_key]
+    other, nonce = core_nonce(data, role)
+    fresh.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, other)] = nonce
+
+    before = card.generated
+    progress = mc.CardSession(card, sid=1).advance(fresh, roots["B"])
+
+    assert progress.stage == mp.SIGNED, "one visit did not finish the signing"
+    assert mp.partial_sig(fresh, role) is not None
+    published = bytes(fresh.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, role.pubkey)])
+    assert published == bytes(psbt.inputs[0].unknown[spare_key][:mc.SIZE_PUBNONCE]), \
+        "the spare's public half is not what was published, so it was not the one used"
+    # It still restocks on the way out, so the count rises; what it must not do is mint
+    # a nonce for THIS signing, which the equality above already establishes.
+    assert card.generated > before
+
+
+def test_a_spare_is_bound_to_the_transaction_that_takes_it(psbt, roots, session):
+    """Once used it stops being a spare, so a second transaction cannot claim it too."""
+    role = role_of(psbt, roots["B"])
+    session.advance(psbt, roots["B"])
+    taken = mc._spares(psbt, role)
+    session2_psbt = psbt
+    assert mc.sealed_nonce_key(role, mp.sighash(session2_psbt, role)) \
+        in session2_psbt.inputs[0].unknown
+    assert all(k in session2_psbt.inputs[0].unknown for k in taken)
+
+
+def test_a_card_that_will_not_restock_still_signs(psbt, roots, card):
+    """Running out of spares costs the next spend a second visit, not this one."""
+    class Stingy(FakeCard):
+        def __init__(self, root):
+            super().__init__(root)
+            self.allowed = 1
+
+        def card_transmit(self, apdu):
+            if apdu[1] == mc.INS_MUSIG2_GENERATE_NONCE and apdu[3] == mc.OP_INIT:
+                if self.allowed <= 0:
+                    return [], 0x9C, 0x46
+                self.allowed -= 1
+            return super().card_transmit(apdu)
+
+    stingy = Stingy(roots["B"])
+    mc.CardSession(stingy, sid=1).advance(psbt, roots["B"])
+    role = role_of(psbt, roots["B"])
+    assert mc.sealed_nonce_key(role, mp.sighash(psbt, role)) in psbt.inputs[0].unknown
+    assert mc._spares(psbt, role) == []
