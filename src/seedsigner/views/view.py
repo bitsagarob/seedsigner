@@ -595,15 +595,36 @@ class UnhandledExceptionView(View):
             )
 
 
+    # What this screen can show before TextArea starts drawing past the bottom
+    # edge, measured on a 240x240 panel by rendering the real screen at growing
+    # lengths: it fits 100 characters and overflows at 104. TextArea only logs
+    # the overflow and keeps drawing, which is fine for authored copy someone
+    # reviews, and no use here: this text is a Python exception message, so
+    # nobody proofreads it and a hardened image has no console to read it from.
+    # Proportional fonts make this approximate, hence the margin.
+    MAX_TEXT_CHARS = 92
+
     def run(self):
+        # The message first, then where it happened. Both matter, but under
+        # truncation the reason is worth more than the file and line, and this
+        # order means the ellipsis eats the location rather than the reason.
+        # Joined with a space rather than a newline: an explicit break ends a
+        # line wherever it falls and wastes the rest of it, which is enough to
+        # overflow a budget measured on text that wraps continuously.
+        text = self.error[2].strip()
+        if self.error[1]:
+            text += "  " + self.error[1].strip()
+        if len(text) > self.MAX_TEXT_CHARS:
+            text = text[:self.MAX_TEXT_CHARS - 1].rstrip() + "…"
+
         self.run_screen(
             ErrorScreen,
             title=_("System Error"),
             status_headline=self.error[0],
-            text=self.error[1] + "\n" + self.error[2],
+            text=text,
             button_data=[ButtonOption("Back to Main Menu")],
         )
-        
+
         return Destination(MainMenuView, clear_history=True)
 
 
