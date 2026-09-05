@@ -704,12 +704,11 @@ class PSBTParser():
                 )
             script = out.script_pubkey
             if script is None or len(script.data) == 0:
-                # A BIP-375 silent payment output has no script until signing; its sp_data
-                # describes it
+                # A BIP-375 silent payment output has no script until signing derives it, so
+                # sp_data is its whole definition here
                 scope = self.psbt.outputs[i] if i < len(self.psbt.outputs) else None
                 if getattr(scope, "sp_data", None) is None:
-                    # An empty script has no address to show the user, so it cannot be
-                    # authorised -- the same reason an unknown witness version is refused.
+                    # No address to show, so nothing the user can authorise
                     raise InvalidPSBTError(
                         f"Output {i} has no script.",
                         code=RejectCode.UNDISPLAYABLE_OUTPUT,
@@ -1012,7 +1011,7 @@ class PSBTParser():
 
 
     def _silent_payment_address(self, out) -> str:
-        """The sp1 string an undelivered silent payment output is aimed at."""
+        """The sp1 string this output is aimed at."""
         from embit.silent_payments.sp import encode_silent_payment_address
 
         return encode_silent_payment_address(
@@ -1026,13 +1025,8 @@ class PSBTParser():
     def _read_payment_name(out):
         """The BIP-353 material carried by one output, or None.
 
-        Only what is in the PSBT is collected here. The proof is deliberately NOT validated during
-        parsing: validation needs the device's date, and the date can change between parsing a PSBT
-        and reviewing it, since the user may go and scan a timecode QR precisely because the review
-        screen told them to. Verifying here would freeze whichever answer happened to be true first.
-
-        `sp_data` is BIP-375's PSBT_OUT_SP_V0_INFO and is present only on silent payment outputs.
-        It is what the proof gets bound to, so it is carried along rather than looked up later.
+        Collected but not validated: validation needs the device's date, which can change between
+        parsing and review.
         """
         from seedsigner.helpers import bip353
 
@@ -1071,11 +1065,10 @@ class PSBTParser():
                     f"Output {i} amount out of range: {value}",
                     code=RejectCode.AMOUNT_OUT_OF_RANGE,
                 )
-            # A silent payment output is shown as the sp1 address it is aimed at, rebuilt from
-            # PSBT_OUT_SP_V0_INFO. Its script, if already present, is checked against that
-            # address at signing time, so the screen shows what the user means to pay. It is
-            # always a destination: only the recipient can control it.
-            if getattr(out, "sp_data", None) is not None:
+            # Always a destination, never change: only the recipient can control it. Both calls
+            # below would fail on the None script.
+            if getattr(out, "sp_data", None) is not None and (
+                    vout[i].script_pubkey is None or len(vout[i].script_pubkey.data) == 0):
                 self.destination_addresses.append(self._silent_payment_address(out))
                 self.destination_amounts.append(value)
                 self.destination_payment_names.append(self._read_payment_name(out))
@@ -1291,8 +1284,13 @@ class PSBTParser():
         self._check_fee_rate()
 
         for vout in self.psbt.tx.vout:
-            if vout.script_pubkey is not None and vout.script_pubkey.data \
-                    and vout.script_pubkey.data[0] == OPCODES.OP_RETURN:
+            # No script yet, so it cannot be an OP_RETURN, but the dust check still applies
+            if vout.script_pubkey is None:
+                if vout.value < DUST_THRESHOLD:
+                    self.risk_warnings.add(RiskWarning.DUST_OUTPUT)
+                    break
+                continue
+            if vout.script_pubkey.data and vout.script_pubkey.data[0] == OPCODES.OP_RETURN:
                 continue
             if vout.value < DUST_THRESHOLD:
                 self.risk_warnings.add(RiskWarning.DUST_OUTPUT)

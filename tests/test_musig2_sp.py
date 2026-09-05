@@ -191,7 +191,7 @@ def test_an_ordinary_spend_has_no_shares_round(data, roots):
     assert mp.Session().advance(psbt, roots["B"]).stage == mp.SIGNED   # Core's nonce is in it
 
 
-def test_the_review_shows_the_silent_payment_address_with_or_without_a_script(data, roots, recipient):
+def test_the_review_shows_the_silent_payment_address_until_its_script_exists(data, roots, recipient):
     from seedsigner.models.psbt_parser import PSBTParser
     from seedsigner.models.seed import Seed
     seed = Seed(mnemonic=data["mnemonics"]["B"].split())
@@ -203,5 +203,6 @@ def test_the_review_shows_the_silent_payment_address_with_or_without_a_script(da
     contribute(psbt, roots)
     for idx, script in mp.expected_scripts(psbt).items():
         psbt.outputs[idx].script_pubkey = script
+    # Once the script exists the parser shows the derived output; the signer checks it
     parser = PSBTParser(SilentPaymentsPSBT.parse(psbt.serialize()), seed=seed, network=SettingsConstants.REGTEST)
-    assert parser.destination_addresses[0].startswith("tsp1")
+    assert parser.destination_addresses[0].startswith("bcrt1p")
