@@ -33,11 +33,10 @@ from seedsigner.helpers import musig2_psbt as mp
 logger = logging.getLogger(__name__)
 
 # BIP-174 proprietary field: 0xFC, then the identifier, then the subtype, then the key
-# data. The identifier keeps this out of the way of every other producer's fields.
-PROPRIETARY = 0xFC
-IDENTIFIER = b"DOOMSIGNER"
+# data. The identifier keeps this out of the way of every other producer's fields, and
+# `musig2_psbt.proprietary_key` builds the key; the whole subtype list lives beside it.
 SUBTYPE_SEALED_NONCE = 0x00
-SUBTYPE_SPARE_NONCE = 0x01
+SUBTYPE_POOLED_NONCE = 0x01
 
 # How many unused nonces to leave behind in the transaction on the way out.
 #
@@ -49,7 +48,7 @@ SUBTYPE_SPARE_NONCE = 0x01
 # They ride in the transaction that was going back anyway, so there is no separate
 # ceremony to stock a card: every signing tops the supply back up as it leaves. The card
 # tracks sixteen unspent nonces at a time, so four plus whatever is in flight fits.
-SPARE_NONCES = 4
+POOLED_NONCES = 4
 
 # What the card answers, and so what a stored field holds: the public nonce it published,
 # then the secret nonce sealed under keys that never leave the applet.
@@ -90,25 +89,23 @@ def sealed_nonce_key(role: mp.Role, msg: bytes) -> bytes:
     misses and the card is asked for a fresh nonce, rather than the old one being spent
     on a transaction the user never approved.
     """
-    return (bytes([PROPRIETARY, len(IDENTIFIER)]) + IDENTIFIER
-            + bytes([SUBTYPE_SEALED_NONCE]) + role.pubkey + role.aggregate.key + msg)
+    return mp.proprietary_key(SUBTYPE_SEALED_NONCE,
+                              role.pubkey + role.aggregate.key + msg)
 
 
-def spare_nonce_key(pubkey: bytes, index: int) -> bytes:
+def pooled_nonce_key(pubkey: bytes, index: int) -> bytes:
     """Where one unused nonce waits, before it has a transaction to belong to.
 
     Keyed by the signer and nothing else. A nonce generated with no message and no
     aggregate is not bound to either, so it can serve whichever spend arrives first;
     the index only keeps several of them apart on the same input.
     """
-    return (bytes([PROPRIETARY, len(IDENTIFIER)]) + IDENTIFIER
-            + bytes([SUBTYPE_SPARE_NONCE]) + pubkey + index.to_bytes(2, "big"))
+    return mp.proprietary_key(SUBTYPE_POOLED_NONCE, pubkey + index.to_bytes(2, "big"))
 
 
-def _spares(psbt, role: mp.Role) -> List[bytes]:
+def _pooled(psbt, role: mp.Role) -> List[bytes]:
     """The keys of this signer's unused nonces on its input, in index order."""
-    prefix = (bytes([PROPRIETARY, len(IDENTIFIER)]) + IDENTIFIER
-              + bytes([SUBTYPE_SPARE_NONCE]) + role.pubkey)
+    prefix = mp.proprietary_key(SUBTYPE_POOLED_NONCE, role.pubkey)
     return sorted(k for k in psbt.inputs[role.input_index].unknown
                   if bytes(k).startswith(prefix))
 
@@ -167,9 +164,9 @@ class CardSession(mp.Session):
         # An unused nonce, if the coordinator brought one. Taking it is what makes this
         # a one-visit signing: its public half was published before the transaction was
         # built, so every nonce is already present and there is nothing to wait for.
-        spare = _spares(psbt, role)
-        if spare:
-            entry = bytes(scope.unknown.pop(spare[0]))
+        pooled = _pooled(psbt, role)
+        if pooled:
+            entry = bytes(scope.unknown.pop(pooled[0]))
             # Bound to this sighash from here on, so it cannot be resumed for a
             # transaction that changed underneath it.
             scope.unknown[field] = entry
@@ -226,16 +223,16 @@ class CardSession(mp.Session):
         one just costs the extra trip again.
         """
         try:
-            for index in range(SPARE_NONCES):
-                if len(_spares(psbt, role)) >= SPARE_NONCES:
+            for index in range(POOLED_NONCES):
+                if len(_pooled(psbt, role)) >= POOLED_NONCES:
                     return
-                key = spare_nonce_key(role.pubkey, index)
+                key = pooled_nonce_key(role.pubkey, index)
                 if key in psbt.inputs[role.input_index].unknown:
                     continue
                 pubnonce, sealed = self._mint(role)
                 psbt.inputs[role.input_index].unknown[key] = pubnonce + sealed
         except Exception:
-            logger.info("musig2: could not restock spare nonces", exc_info=True)
+            logger.info("musig2: could not restock pooled nonces", exc_info=True)
 
     # --- the card ----------------------------------------------------------------------
 

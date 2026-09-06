@@ -23,9 +23,12 @@ every nonce is present, write the partial signature, destroy the secret nonce). 
 the first-round psbt republishes the same nonce. A psbt that already carries our partial
 signature is verified, never re-signed.
 
-Silent payment send: one round before those. Each signer writes `d_i * B_scan` (0x21) and a
-BIP-374 proof (0x22), keyed `<scan key><participant key>`. The coordinator combines the
-shares with the public KeyAgg coefficients, parity and tweaks and writes the output script.
+Silent payment send: one round before those. Each signer writes `d_i * B_scan` and a
+BIP-374 proof, keyed `<scan key><participant key>`. Both ride in BIP-174 proprietary fields
+(0xFC, identifier `DOOMSIGNER`, subtypes 0x02 and 0x03) rather than on per-input numbers just
+past the end of the registry, which are unallocated rather than reserved and which a later BIP
+could claim and mean something else by. The coordinator combines the shares with the public
+KeyAgg coefficients, parity and tweaks and writes the output script.
 Every later round verifies every proof and the script before a nonce or a signature leaves
 the device. Inputs that are not MuSig2 must carry the BIP-375 per-input share and proof.
 
