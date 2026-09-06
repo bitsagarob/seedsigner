@@ -146,7 +146,7 @@ def test_a_device_that_lost_power_resumes_the_same_nonce(psbt, roots, card):
     mc.CardSession(card, sid=1).advance(psbt, roots["B"])
     again = bytes(psbt.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, role.pubkey)])
     assert again == published, "the second visit published a different nonce"
-    # Not a counter: signing also tops up the spare supply, so the card is asked for
+    # Not a counter: signing also tops up the pooled nonce supply, so the card is asked for
     # more than one nonce in a visit. What matters is that this signing kept its own.
     assert card.spent == set(), "the nonce was opened before there was anything to sign"
 
@@ -290,24 +290,24 @@ def test_a_card_session_is_truthy(roots):
     assert bool(mc.CardSession(FakeCard(roots["B"]), sid=1)) is True
 
 
-# --- the spare supply, which is what removes the extra visit -------------------------
+# --- the pooled nonce supply, which is what removes the extra visit -------------------------
 
 def test_signing_leaves_a_full_supply_behind(psbt, roots, session, card):
     session.advance(psbt, roots["B"])
     role = role_of(psbt, roots["B"])
-    assert len(mc._spares(psbt, role)) == mc.SPARE_NONCES
+    assert len(mc._pooled(psbt, role)) == mc.POOLED_NONCES
 
 
-def test_a_spare_is_taken_instead_of_asking_the_card(psbt, roots, card, data):
+def test_a_pooled_nonce_is_taken_instead_of_asking_the_card(psbt, roots, card, data):
     """The coordinator brought a nonce, so this signing does not need to make one."""
     mc.CardSession(card, sid=1).advance(psbt, roots["B"])
     role = role_of(psbt, roots["B"])
 
-    # A second transaction arrives carrying one of the spares, as a coordinator holding
+    # A second transaction arrives carrying one of the pooled nonces, as a coordinator holding
     # the supply would build it. Everything else about it is new.
     fresh = without_other_nonces(data["psbt_round_one"])
-    spare_key = mc._spares(psbt, role)[0]
-    fresh.inputs[0].unknown[spare_key] = psbt.inputs[0].unknown[spare_key]
+    pooled_key = mc._pooled(psbt, role)[0]
+    fresh.inputs[0].unknown[pooled_key] = psbt.inputs[0].unknown[pooled_key]
     other, nonce = core_nonce(data, role)
     fresh.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, other)] = nonce
 
@@ -324,18 +324,18 @@ def test_a_spare_is_taken_instead_of_asking_the_card(psbt, roots, card, data):
     assert progress.stage == mp.SIGNED, "one visit did not finish the signing"
     assert mp.partial_sig(fresh, role) is not None
     published = bytes(fresh.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, role.pubkey)])
-    assert published == bytes(psbt.inputs[0].unknown[spare_key][:mc.SIZE_PUBNONCE]), \
-        "the spare's public half is not what was published, so it was not the one used"
+    assert published == bytes(psbt.inputs[0].unknown[pooled_key][:mc.SIZE_PUBNONCE]), \
+        "the pooled nonce's public half is not what was published, so it was not the one used"
     # It still restocks on the way out, so the count rises; what it must not do is mint
     # a nonce for THIS signing, which the equality above already establishes.
     assert card.generated > before
 
 
-def test_a_spare_is_bound_to_the_transaction_that_takes_it(psbt, roots, session):
-    """Once used it stops being a spare, so a second transaction cannot claim it too."""
+def test_a_pooled_nonce_is_bound_to_the_transaction_that_takes_it(psbt, roots, session):
+    """Once used it stops being a pooled nonce, so a second transaction cannot claim it too."""
     role = role_of(psbt, roots["B"])
     session.advance(psbt, roots["B"])
-    taken = mc._spares(psbt, role)
+    taken = mc._pooled(psbt, role)
     session2_psbt = psbt
     assert mc.sealed_nonce_key(role, mp.sighash(session2_psbt, role)) \
         in session2_psbt.inputs[0].unknown
@@ -343,7 +343,7 @@ def test_a_spare_is_bound_to_the_transaction_that_takes_it(psbt, roots, session)
 
 
 def test_a_card_that_will_not_restock_still_signs(psbt, roots, card):
-    """Running out of spares costs the next spend a second visit, not this one."""
+    """Running out of pooled nonces costs the next spend a second visit, not this one."""
     class Stingy(FakeCard):
         def __init__(self, root):
             super().__init__(root)
@@ -360,4 +360,4 @@ def test_a_card_that_will_not_restock_still_signs(psbt, roots, card):
     mc.CardSession(stingy, sid=1).advance(psbt, roots["B"])
     role = role_of(psbt, roots["B"])
     assert mc.sealed_nonce_key(role, mp.sighash(psbt, role)) in psbt.inputs[0].unknown
-    assert mc._spares(psbt, role) == []
+    assert mc._pooled(psbt, role) == []

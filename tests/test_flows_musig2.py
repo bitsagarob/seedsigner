@@ -144,12 +144,12 @@ class TestMusig2Flows(FlowTest):
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
         assert isinstance(self.controller.musig2_session, musig2_card.CardSession)
-        # Not an exact count: signing also leaves a full supply of spare nonces behind,
+        # Not an exact count: signing also leaves a full supply of pooled nonces behind,
         # so a visit asks the card for several. What matters is that it asked at all.
         assert card.generated >= 1, "the round ran without asking the card for a nonce"
         role = self._role()
-        assert len(musig2_card._spares(self.controller.psbt, role)) == musig2_card.SPARE_NONCES, \
-            "the transaction went back without the spares that save the next visit"
+        assert len(musig2_card._pooled(self.controller.psbt, role)) == musig2_card.POOLED_NONCES, \
+            "the transaction went back without the pooled nonces that save the next visit"
 
     def test_declining_keeps_the_nonce_in_memory(self, monkeypatch):
         from test_musig2_card import FakeCardWithSecrets

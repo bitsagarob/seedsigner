@@ -35,10 +35,23 @@ PSBT_IN_MUSIG2_PARTIAL_SIG = 0x1C
 # BIP-375, for inputs that are not MuSig2
 PSBT_IN_SP_ECDH_SHARE = 0x1D
 PSBT_IN_SP_DLEQ = 0x1E
-# Partial share and proof of a MuSig2 participant (macgyver13's proposal); key is
-# <scan key><participant key>
-PSBT_IN_MUSIG2_PARTIAL_ECDH_SHARE = 0x21
-PSBT_IN_MUSIG2_PARTIAL_DLEQ = 0x22
+
+# BIP-174 proprietary space, which is where a field nobody has standardised belongs.
+# The per-input registry allocates 0x00 to 0x20 and then jumps to 0xFC, so numbers just
+# past the end are unallocated rather than reserved: a later BIP may take one and mean
+# something else by it, and two producers would then disagree about the same key. The
+# identifier keeps our fields out of everyone's way instead.
+#
+# Subtypes, all of them, wherever they are used from:
+#   0x00  sealed nonce   musig2_card.SUBTYPE_SEALED_NONCE
+#   0x01  pooled nonce    musig2_card.SUBTYPE_POOLED_NONCE
+#   0x02  partial share of a MuSig2 participant (macgyver13's proposal), keyed
+#         <scan key><participant key>
+#   0x03  the BIP-374 proof of that share, keyed the same way
+PSBT_IN_PROPRIETARY = 0xFC
+PROPRIETARY_IDENTIFIER = b"DOOMSIGNER"
+SUBTYPE_MUSIG2_PARTIAL_ECDH_SHARE = 0x02
+SUBTYPE_MUSIG2_PARTIAL_DLEQ = 0x03
 
 # BIP-328
 MUSIG2_CHAINCODE = sha256(b"MuSig2MuSig2MuSig2")
@@ -47,6 +60,25 @@ HARDENED = 0x80000000
 SHARES = "shares"
 NONCE = "nonce"
 SIGNED = "signed"
+
+
+def compact_size(i: int) -> bytes:
+    """A Bitcoin compact size uint. Under 253 it is the one byte it looks like."""
+    if i < 0xFD:
+        return bytes([i])
+    if i <= 0xFFFF:
+        return b"\xfd" + i.to_bytes(2, "little")
+    if i <= 0xFFFFFFFF:
+        return b"\xfe" + i.to_bytes(4, "little")
+    return b"\xff" + i.to_bytes(8, "little")
+
+
+def proprietary_key(subtype: int, keydata: bytes = b"") -> bytes:
+    """A BIP-174 proprietary key: 0xFC, the identifier with its length, the subtype,
+    then whatever tells one field of that subtype from another."""
+    return (bytes([PSBT_IN_PROPRIETARY])
+            + compact_size(len(PROPRIETARY_IDENTIFIER)) + PROPRIETARY_IDENTIFIER
+            + compact_size(subtype) + keydata)
 
 
 class Musig2Error(Exception):
@@ -280,12 +312,12 @@ def sp_scripts_missing(psbt) -> bool:
                for out in psbt.outputs)
 
 
-def _share_key(field_type: int, scan_key: bytes, pubkey: bytes) -> bytes:
-    return bytes([field_type]) + scan_key + pubkey
+def _share_key(subtype: int, scan_key: bytes, pubkey: bytes) -> bytes:
+    return proprietary_key(subtype, scan_key + pubkey)
 
 
 def has_share(psbt, role: Role, scan_key: bytes) -> bool:
-    return _share_key(PSBT_IN_MUSIG2_PARTIAL_ECDH_SHARE, scan_key, role.pubkey) in \
+    return _share_key(SUBTYPE_MUSIG2_PARTIAL_ECDH_SHARE, scan_key, role.pubkey) in \
         psbt.inputs[role.input_index].unknown
 
 
@@ -293,9 +325,9 @@ def write_share(psbt, role: Role, secret: bytes, scan_key: bytes) -> None:
     from embit.silent_payments.dleq import generate_dleq_proof
     from embit.silent_payments.sp import _tweak_mul
     scope = psbt.inputs[role.input_index]
-    scope.unknown[_share_key(PSBT_IN_MUSIG2_PARTIAL_ECDH_SHARE, scan_key, role.pubkey)] = \
+    scope.unknown[_share_key(SUBTYPE_MUSIG2_PARTIAL_ECDH_SHARE, scan_key, role.pubkey)] = \
         _tweak_mul(scan_key, bytes(secret))
-    scope.unknown[_share_key(PSBT_IN_MUSIG2_PARTIAL_DLEQ, scan_key, role.pubkey)] = \
+    scope.unknown[_share_key(SUBTYPE_MUSIG2_PARTIAL_DLEQ, scan_key, role.pubkey)] = \
         generate_dleq_proof(bytes(secret), scan_key, r=os.urandom(32))
 
 
@@ -306,8 +338,8 @@ def _musig2_input_share(scope, agg: Aggregate, scan_key: bytes):
     g = 1 if m.has_even_y(Q) else m.n - 1
     acc = None
     for pk in agg.participants:
-        share = scope.unknown.get(_share_key(PSBT_IN_MUSIG2_PARTIAL_ECDH_SHARE, scan_key, pk))
-        proof = scope.unknown.get(_share_key(PSBT_IN_MUSIG2_PARTIAL_DLEQ, scan_key, pk))
+        share = scope.unknown.get(_share_key(SUBTYPE_MUSIG2_PARTIAL_ECDH_SHARE, scan_key, pk))
+        proof = scope.unknown.get(_share_key(SUBTYPE_MUSIG2_PARTIAL_DLEQ, scan_key, pk))
         if share is None:
             raise SharesIncomplete()
         if proof is None or not verify_dleq_proof(pk, scan_key, share, proof):

@@ -269,3 +269,27 @@ def test_a_seed_that_also_owns_an_ordinary_input_is_refused(psbt, roots):
 def test_a_seed_with_no_role_is_refused(psbt):
     with pytest.raises(mp.Musig2Error):
         mp.Session().advance(psbt, bip32.HDKey.from_seed(os.urandom(64)))
+
+
+def test_a_proprietary_key_is_laid_out_the_way_bip174_says():
+    """0xFC, the identifier with its compact-size length, the subtype, then the key data.
+
+    Pinned because the alternative these fields used to take, a per-input number just past
+    the end of the registry, is unallocated rather than reserved: a later BIP may claim it
+    and mean something else by it.
+    """
+    scan_key, pubkey = b"\x02" + b"\x11" * 32, b"\x03" + b"\x22" * 32
+    key = mp._share_key(mp.SUBTYPE_MUSIG2_PARTIAL_ECDH_SHARE, scan_key, pubkey)
+    assert key == bytes.fromhex("fc0a") + b"DOOMSIGNER" + b"\x02" + scan_key + pubkey
+    assert len(key) == 1 + 1 + 10 + 1 + 33 + 33
+    assert mp.proprietary_key(mp.SUBTYPE_MUSIG2_PARTIAL_DLEQ)[-1] == 0x03
+
+
+def test_compact_size_is_correct_past_one_byte():
+    assert mp.compact_size(0) == b"\x00"
+    assert mp.compact_size(252) == b"\xfc"
+    assert mp.compact_size(253) == b"\xfd\xfd\x00"
+    assert mp.compact_size(0xFFFF) == b"\xfd\xff\xff"
+    assert mp.compact_size(0x10000) == b"\xfe\x00\x00\x01\x00"
+    assert mp.compact_size(0xFFFFFFFF) == b"\xfe\xff\xff\xff\xff"
+    assert mp.compact_size(0x100000000) == b"\xff" + (0x100000000).to_bytes(8, "little")

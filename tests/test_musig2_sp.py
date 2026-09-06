@@ -112,7 +112,7 @@ def test_a_share_that_does_not_prove_out_is_refused(data, roots, recipient, atta
     role = role_of(psbt, roots["A"])
     scan_key = mp.sp_scan_keys(psbt)[0]
     scope = psbt.inputs[0]
-    proof_key = mp._share_key(mp.PSBT_IN_MUSIG2_PARTIAL_DLEQ, scan_key, role.pubkey)
+    proof_key = mp._share_key(mp.SUBTYPE_MUSIG2_PARTIAL_DLEQ, scan_key, role.pubkey)
     if attack == "flip_proof":
         proof = bytearray(scope.unknown[proof_key])
         proof[40] ^= 1
@@ -124,7 +124,7 @@ def test_a_share_that_does_not_prove_out_is_refused(data, roots, recipient, atta
         from embit.silent_payments.dleq import generate_dleq_proof
         from embit.silent_payments.sp import _tweak_mul
         rogue = os.urandom(32)
-        scope.unknown[mp._share_key(mp.PSBT_IN_MUSIG2_PARTIAL_ECDH_SHARE, scan_key, role.pubkey)] = \
+        scope.unknown[mp._share_key(mp.SUBTYPE_MUSIG2_PARTIAL_ECDH_SHARE, scan_key, role.pubkey)] = \
             _tweak_mul(scan_key, rogue)
         scope.unknown[proof_key] = generate_dleq_proof(rogue, scan_key, r=os.urandom(32))
     with pytest.raises(mp.Musig2Error):

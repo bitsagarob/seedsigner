@@ -54,9 +54,9 @@ class TestMusig2CardScreensFit(BaseTest):
             LargeIconStatusScreen(
                 title="MuSig2",
                 status_icon_size=0,
-                status_headline="Two Steps",
+                status_headline="Card Signing",
                 status_color=GUIConstants.BODY_FONT_COLOR,
-                text="A card can hold your place, so you can power off between them.",
+                text="Your card holds your place, so this device need not stay on.",
                 show_back_button=True,
                 button_data=[PSBTMusig2CardOfferView.USE_CARD,
                              PSBTMusig2CardOfferView.CONTINUE],

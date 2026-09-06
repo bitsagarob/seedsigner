@@ -1447,12 +1447,16 @@ class PSBTMusig2CardOfferView(View):
             # look like it came from somewhere other than the flow it belongs to.
             title=_("MuSig2"),
             status_icon_size=0,
-            # TRANSLATOR_NOTE: This signing has two steps with a wait in between
-            status_headline=_("Two Steps"),
+            # No step count. This signing takes two visits the first time and one
+            # afterwards, once the card has left unused nonces in the transaction, so
+            # any number here is wrong half the time. What is always true is what the
+            # card does, and that is what survives the next change to the flow too.
+            # TRANSLATOR_NOTE: Signing using a smartcard to hold state between rounds
+            status_headline=_("Card Signing"),
             # Body-coloured, not the green a status screen defaults to: nothing has
             # succeeded here, a question is being asked.
             status_color=GUIConstants.BODY_FONT_COLOR,
-            text=_("A card can hold your place, so you can power off between them."),
+            text=_("Your card holds your place, so this device need not stay on."),
             show_back_button=True,
             button_data=button_data,
         )
