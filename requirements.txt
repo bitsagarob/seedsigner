@@ -2,7 +2,7 @@
 # than to the branch name so a force-push upstream cannot silently change what we
 # build. Same fork-by-URL pattern as the pgpy pin below. Drop back to the PyPI
 # release the day silent payments land in embit proper.
-embit @ https://github.com/bitsagarob/embit/archive/07116fa232840e9c92d01158f6efd40bb58bee54.zip  # notTanveer's embit#145 silent payments + BIP-390 musig()
+embit @ https://github.com/bitsagarob/embit/archive/a4ee5a41044a0ed3e2b1e92c89880a1ac2e9cb18.zip  # notTanveer's embit#145 silent payments + BIP-390 musig()
 # BIP-353 on-device DNSSEC validation. Our fork of alvroble/pydnssec-prover, on a branch
 # adding an optional libcrypto backend for ECDSA. Pinned to a commit for the same reason embit
 # is: there is no release, upstream is a work in progress, and a force-push must not be able to
