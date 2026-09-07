@@ -87,13 +87,13 @@ class TestMusig2CardScreensFit(BaseTest):
 
         for headline, text in (
             ("Step 1 of 2",
-             "Not signed yet. Send this back, then scan it again. Your card "
+             "Not signed yet. Back to your wallet, then scan it again. Your card "
              "remembers this step, so you can switch off."),
             ("Step 1 of 2",
-             "Not signed yet. Send this back, then scan it again. Switching off "
-             "would start over."),
+             "Not signed yet. Back to your wallet, then scan it again. Switching "
+             "off would start over."),
             ("Signed",
-             "Nothing more to do on this device. Send this back to finish."),
+             "Nothing more to do on this device. Back to your wallet to finish."),
         ):
             with caplog.at_level(logging.WARNING, logger="seedsigner.gui.components"):
                 LargeIconStatusScreen(

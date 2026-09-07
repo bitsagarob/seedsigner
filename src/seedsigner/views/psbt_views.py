@@ -1586,15 +1586,15 @@ class PSBTMusig2RoundView(View):
         # keep a secret that cannot be replayed.
         if self.controller.musig2_session.nonce_on_card:
             # TRANSLATOR_NOTE: The smartcard can resume this half-finished signing
-            waiting = _("Not signed yet. Send this back, then scan it again. Your card "
-                        "remembers this step, so you can switch off.")
+            waiting = _("Not signed yet. Back to your wallet, then scan it again. Your "
+                        "card remembers this step, so you can switch off.")
         else:
             # The consequence rather than an instruction: "keep this device on" said
             # nothing about what ignoring it would cost, and this is the path where
             # powering off really does destroy the work.
             # TRANSLATOR_NOTE: Nothing is stored, so powering off loses this signing
-            waiting = _("Not signed yet. Send this back, then scan it again. Switching "
-                        "off would start over.")
+            waiting = _("Not signed yet. Back to your wallet, then scan it again. "
+                        "Switching off would start over.")
 
         if progress.stage == musig2_psbt.SIGNED:
             # No step count once it is signed. The count is of MuSig2 rounds, of which
@@ -1606,9 +1606,13 @@ class PSBTMusig2RoundView(View):
             #
             # "on this device" rather than a bare "Signed", because in a 2-of-3 what is
             # finished here is this signer's part, and the transaction still goes back.
+            # "your wallet" rather than a bare "back": back to where was a fair question,
+            # and the app already uses that phrase a few hundred lines up, in the full-spend
+            # warning. The coordinator's own name would be better still and is not available
+            # here; "your wallet software" is the app's fallback elsewhere and does not fit.
             # TRANSLATOR_NOTE: This signer is finished; the transaction goes back to the coordinator
             headline = _("Signed")
-            text = _("Nothing more to do on this device. Send this back to finish.")
+            text = _("Nothing more to do on this device. Back to your wallet to finish.")
         else:
             # Still unfinished, and here the count is worth having: it says another
             # visit is coming.
