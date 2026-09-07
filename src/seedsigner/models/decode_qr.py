@@ -760,7 +760,7 @@ class DecodeQR:
             elif "multisig setup file" in s.lower():
                 return QRType.WALLET__CONFIGFILE
 
-            elif "sortedmulti" in s:
+            elif "sortedmulti" in s or "musig(" in s:
                 return QRType.WALLET__GENERIC
 
             # Seed
