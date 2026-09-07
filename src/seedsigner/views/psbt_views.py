@@ -1597,16 +1597,29 @@ class PSBTMusig2RoundView(View):
                         "off would start over.")
 
         if progress.stage == musig2_psbt.SIGNED:
-            step, text = steps, _("Signed. Send this back to finish.")
-        elif progress.stage == musig2_psbt.NONCE:
-            step, text = steps - 1, waiting
+            # No step count once it is signed. The count is of MuSig2 rounds, of which
+            # there are always two, and that is not what the user is counting: a spend
+            # where the coordinator brought a pre-published nonce finishes in a single
+            # visit, and reporting "Step 2 of 2" at the end of it named a step one they
+            # never performed. It also collided with the "2 of 3" already in the title,
+            # which is the signing policy and not a step at all.
+            #
+            # "on this device" rather than a bare "Signed", because in a 2-of-3 what is
+            # finished here is this signer's part, and the transaction still goes back.
+            # TRANSLATOR_NOTE: This signer is finished; the transaction goes back to the coordinator
+            headline = _("Signed")
+            text = _("Nothing more to do on this device. Send this back to finish.")
         else:
-            step, text = 1, waiting
+            # Still unfinished, and here the count is worth having: it says another
+            # visit is coming.
+            step = steps - 1 if progress.stage == musig2_psbt.NONCE else 1
+            headline = _("Step {n} of {steps}").format(n=step, steps=steps)
+            text = waiting
 
         self.run_screen(
             LargeIconStatusScreen,
             title=_("MuSig2 {policy}").format(policy=policy) if policy else _("MuSig2"),
-            status_headline=_("Step {n} of {steps}").format(n=step, steps=steps),
+            status_headline=headline,
             text=text,
             show_back_button=False,
             button_data=[ButtonOption(_("Continue"))],

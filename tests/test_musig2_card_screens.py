@@ -78,23 +78,27 @@ class TestMusig2CardScreensFit(BaseTest):
 
         self._no_overflow(caplog, "the wrong-card warning")
 
-    def test_both_round_screen_texts_fit(self, caplog):
-        """The round screen says where the nonce is, and the card sentence is the
-        longer of the two. Four lines fit; a fifth would clip."""
+    def test_every_round_screen_text_fits(self, caplog):
+        """All three states of the round screen. The card sentence is the longest;
+        four lines fit and a fifth would clip."""
         import logging
 
         from seedsigner.gui.screens.screen import LargeIconStatusScreen, ButtonOption
 
-        for text in (
-            "Not signed yet. Send this back, then scan it again. Your card "
-            "remembers this step, so you can switch off.",
-            "Not signed yet. Send this back, then scan it again. Switching off "
-            "would start over.",
+        for headline, text in (
+            ("Step 1 of 2",
+             "Not signed yet. Send this back, then scan it again. Your card "
+             "remembers this step, so you can switch off."),
+            ("Step 1 of 2",
+             "Not signed yet. Send this back, then scan it again. Switching off "
+             "would start over."),
+            ("Signed",
+             "Nothing more to do on this device. Send this back to finish."),
         ):
             with caplog.at_level(logging.WARNING, logger="seedsigner.gui.components"):
                 LargeIconStatusScreen(
                     title="MuSig2 2 of 3",
-                    status_headline="Step 1 of 2",
+                    status_headline=headline,
                     text=text,
                     show_back_button=False,
                     button_data=[ButtonOption("Continue")],

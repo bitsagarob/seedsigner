@@ -278,3 +278,62 @@ class TestMusig2Flows(FlowTest):
         assert len(seen) == 1
         assert "would start over" in seen[0].lower(), seen
         assert "card" not in seen[0].lower(), seen
+
+    def test_a_spend_that_finishes_in_one_visit_shows_no_step_count(self):
+        """The count is of MuSig2 rounds, and there are always two of those.
+
+        A spend where the coordinator brought a nonce this card published earlier
+        finishes in a single visit, and telling that user "Step 2 of 2" named a
+        step they never performed.
+        """
+        from embit.psbt import PSBT
+        from seedsigner.helpers import musig2_card as mc, musig2_psbt as mp
+        from test_musig2_card import FakeCardWithSecrets, core_nonce, role_of
+
+        root = self.seed.get_root(SettingsConstants.REGTEST)
+        card = FakeCardWithSecrets(root, {1: root})
+
+        # A first signing, run here only to leave this card's spare nonces behind
+        # in a transaction, which is how they reach a coordinator at all.
+        first = PSBT.from_string(self._without_other_nonces())
+        mc.CardSession(card, sid=1).advance(first, root)
+        role = role_of(first, root)
+        pooled_key = mc._pooled(first, role)[0]
+        pooled_value = first.inputs[0].unknown[pooled_key]
+
+        # What a coordinator holding that spare builds next: every public nonce is
+        # already present, so there is nothing for this device to wait for.
+        fresh = PSBT.from_string(self._without_other_nonces())
+        fresh.inputs[0].unknown[pooled_key] = pooled_value
+        other, nonce = core_nonce(self.data, role)
+        fresh.inputs[0].unknown[mp._key(mp.PSBT_IN_MUSIG2_PUB_NONCE, role, other)] = nonce
+
+        seen = []
+
+        def capture(view):
+            original = view.run_screen
+
+            def spy(screen_cls, **kwargs):
+                seen.append((kwargs.get("status_headline", ""), kwargs.get("text", "")))
+                return original(screen_cls, **kwargs)
+
+            view.run_screen = spy
+
+        def open_this_card():
+            # The same card object: a nonce sealed by one card cannot be opened by
+            # another, so a fresh fake here would prove nothing.
+            self.controller.Satochip_Connector = card
+
+        self.run_sequence(self._walk(fresh.to_string(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView, is_redirect=True),
+            FlowStep(psbt_views.PSBTMusig2RoundView, before_run=capture),
+            FlowStep(psbt_views.PSBTSignedQRDisplayView),
+        ], before_scan=open_this_card))
+
+        assert mp.partial_sig(self.controller.psbt, role) is not None, \
+            "this was meant to sign in one visit; it did not sign at all"
+        assert len(seen) == 1
+        headline, text = seen[0]
+        assert headline == "Signed", headline
+        assert "step" not in headline.lower(), headline
+        assert "nothing more to do" in text.lower(), text
