@@ -4,7 +4,7 @@ from typing import Dict, List, NamedTuple, Optional
 
 from embit.hashes import hash160, sha256, tagged_hash
 from embit.script import Script
-from embit.transaction import SIGHASH
+from embit.transaction import SIGHASH, Witness
 
 from seedsigner.helpers import musig2 as m
 
@@ -281,6 +281,39 @@ def write_pubnonce(psbt, role: Role, pubnonce: bytes) -> None:
     psbt.inputs[role.input_index].unknown[_key(PSBT_IN_MUSIG2_PUB_NONCE, role, role.pubkey)] = pubnonce
 
 
+def all_partial_sigs(psbt, role: Role) -> List[Optional[bytes]]:
+    """Every participant's partial signature for this aggregate, in order."""
+    scope = psbt.inputs[role.input_index]
+    return [scope.unknown.get(_key(PSBT_IN_MUSIG2_PARTIAL_SIG, role, pk))
+            for pk in role.aggregate.participants]
+
+
+def finalise_keypath(psbt, role: Role, msg: bytes) -> bool:
+    """Turn a complete set of partial signatures into the witness, here.
+
+    Summing them needs no secret, so the signer who happens to be last can do
+    it, and then the transaction leaves the device finished rather than as a
+    PSBT somebody still has to assemble. A key-path spend's witness is the one
+    signature and nothing else.
+
+    Returns False and changes nothing whenever it is not the last signer, which
+    is every pass but one.
+    """
+    scope = psbt.inputs[role.input_index]
+    if scope.final_scriptwitness is not None:
+        return False
+    sigs = all_partial_sigs(psbt, role)
+    nonces = pubnonces(psbt, role)
+    if any(sig is None for sig in sigs) or None in nonces:
+        return False
+    agg = role.aggregate
+    context = m.SessionContext(m.nonce_agg(nonces), agg.participants,
+                               agg.tweaks, agg.is_xonly, msg)
+    scope.final_scriptwitness = Witness(
+        [m.partial_sig_agg([bytes(sig) for sig in sigs], context)])
+    return True
+
+
 def partial_sig(psbt, role: Role) -> Optional[bytes]:
     return psbt.inputs[role.input_index].unknown.get(_key(PSBT_IN_MUSIG2_PARTIAL_SIG, role, role.pubkey))
 
@@ -525,5 +558,11 @@ class Session:
                 _wipe(secret)
             write_partial_sig(psbt, role, sig)
             signed += 1
+
+        # Last one out finishes the transaction. Cheap to attempt and silent
+        # unless every participant has now signed, which is true on exactly one
+        # pass and never on the others.
+        for role in keypath:
+            finalise_keypath(psbt, role, sighash(psbt, role))
 
         return Progress(SIGNED if signed and not waiting else NONCE, signed, waiting, leaves)

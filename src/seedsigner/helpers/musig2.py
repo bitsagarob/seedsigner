@@ -410,3 +410,24 @@ def partial_sig_verify_internal(psig: bytes, pubnonce: bytes, pk: bytes,
     g = 1 if has_even_y(Q) else n - 1
     g_ = g * gacc % n
     return point_mul_base(s) == point_add(Re_s, point_mul(P, e * a * g_ % n))
+
+
+def partial_sig_agg(psigs: List[bytes], session_ctx: SessionContext) -> bytes:
+    """Sum the partial signatures into the one signature the chain sees.
+
+    BIP-327's PartialSigAgg. It needs no secret and no seed, so whoever holds
+    every partial signature can do it, which on a device means whichever seed
+    happens to sign last. Doing it here rather than back at the coordinator is
+    what lets an air-gapped signer hand back a finished transaction instead of
+    a PSBT somebody else still has to assemble.
+    """
+    (Q, _, tacc, _, R, e) = get_session_values(session_ctx)
+    s = 0
+    for i, psig in enumerate(psigs):
+        s_i = int_from_bytes(psig)
+        if s_i >= n:
+            raise InvalidContributionError(i, "psig")
+        s = (s + s_i) % n
+    g = 1 if has_even_y(Q) else n - 1
+    s = (s + e * g * tacc) % n
+    return xbytes(R) + bytes_from_int(s)
