@@ -1421,7 +1421,8 @@ class PSBTFinalizeView(View):
 
 class PSBTMusig2CardOfferView(View):
     """
-        Offered once per signing, before the first round.
+        Offered once per signing, before the first round, unless a card that is
+        already open is holding this seed, in which case it is simply used.
 
         Signing is not always finished in one pass, and something has to remember where
         you got to. Memory forgets at power-off, so the device has to stay on; a card
@@ -1442,6 +1443,28 @@ class PSBTMusig2CardOfferView(View):
     KEEP_DEVICE_ON = ButtonOption("Keep Device On")
 
     def run(self):
+        from seedsigner.helpers import musig2_card
+
+        # A card that is already open and holding this seed needs no asking. The user
+        # unlocked it moments ago to load the seed off it, and `init_satochip` below
+        # tears that connector down and rebuilds it, which on a default device costs a
+        # second PIN for a question whose answer is already sitting in the reader.
+        #
+        # Silent selection was withdrawn once before, for two reasons. It relied on a
+        # connector surviving a trip Home, which wipes the smartcard session unless
+        # Cache Smartcard Pin is on, and that ships off; so it did nothing for anyone.
+        # And it was invisible, which makes the benefit worthless: a user who cannot
+        # see where the nonce is kept cannot know that powering off is safe.
+        #
+        # Neither applies here. This fires only on a connector that is open right now
+        # in this same flow, reached by loading a seed off a SeedKeeper and then
+        # picking "Scan transaction", which never passes Home. And the round screen
+        # now states where the nonce ended up on every round, so nothing is hidden.
+        session = musig2_card.select(self.controller, self.controller.psbt_parser.root)
+        if session is not None:
+            self.controller.musig2_session = session
+            return Destination(PSBTMusig2RoundView, skip_current_view=True)
+
         button_data = [self.USE_CARD, self.KEEP_DEVICE_ON]
         # Not a WarningScreen. This is an offer of convenience, and that screen supplies
         # a "Caution" title and an amber alert icon, which read as a hazard warning about
@@ -1510,8 +1533,10 @@ class PSBTMusig2RoundView(View):
     """
     One MuSig2 round. The first round produces no signature, and the screen says so
     rather than reporting a failure. The secret nonce between rounds lives on the
-    Controller, in memory only, unless a card that is already open is holding this
-    seed, in which case the card holds it and releases it once.
+    Controller, in memory only, unless PSBTMusig2CardOfferView put a card-backed
+    session there, in which case the card holds it and releases it once. Either way
+    the screen says which, because that is what decides whether the user may power
+    the device off before scanning this back.
     """
 
     def run(self):
@@ -1547,12 +1572,24 @@ class PSBTMusig2RoundView(View):
                     progress.stage, progress.signed, progress.waiting, progress.leaves)
 
         steps = 3 if musig2_psbt.sp_scan_keys(psbt) else 2
+        # Where the secret nonce is decides what the user may do next, so the screen
+        # says it rather than a screen earlier in the flow having promised it. It only
+        # matters while there is a gap to survive: once signed the nonce is spent.
+        if self.controller.musig2_session.nonce_on_card:
+            # TRANSLATOR_NOTE: The smartcard is holding this signing's secret nonce
+            waiting = _("Not signed yet. Send this back, then scan it again. Your card "
+                        "is holding it, so you can switch off.")
+        else:
+            # TRANSLATOR_NOTE: The nonce is in memory, so powering off loses the signing
+            waiting = _("Not signed yet. Send this back, then scan it again. Keep this "
+                        "device on.")
+
         if progress.stage == musig2_psbt.SIGNED:
             step, text = steps, _("Signed. Send this back to finish.")
         elif progress.stage == musig2_psbt.NONCE:
-            step, text = steps - 1, _("Not signed yet. Send this back, then scan it again.")
+            step, text = steps - 1, waiting
         else:
-            step, text = 1, _("Not signed yet. Send this back, then scan it again.")
+            step, text = 1, waiting
 
         self.run_screen(
             LargeIconStatusScreen,

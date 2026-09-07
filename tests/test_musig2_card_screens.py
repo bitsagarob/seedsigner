@@ -77,3 +77,25 @@ class TestMusig2CardScreensFit(BaseTest):
             )
 
         self._no_overflow(caplog, "the wrong-card warning")
+
+    def test_both_round_screen_texts_fit(self, caplog):
+        """The round screen says where the nonce is, and the card sentence is the
+        longer of the two. Four lines fit; a fifth would clip."""
+        import logging
+
+        from seedsigner.gui.screens.screen import LargeIconStatusScreen, ButtonOption
+
+        for text in (
+            "Not signed yet. Send this back, then scan it again. Your card is "
+            "holding it, so you can switch off.",
+            "Not signed yet. Send this back, then scan it again. Keep this device on.",
+        ):
+            with caplog.at_level(logging.WARNING, logger="seedsigner.gui.components"):
+                LargeIconStatusScreen(
+                    title="MuSig2 2 of 3",
+                    status_headline="Step 1 of 2",
+                    text=text,
+                    show_back_button=False,
+                    button_data=[ButtonOption("Continue")],
+                )
+            self._no_overflow(caplog, "the round screen")

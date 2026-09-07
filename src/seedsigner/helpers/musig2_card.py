@@ -132,6 +132,8 @@ def _path_bytes(derivation: List[int]) -> bytes:
 class CardSession(mp.Session):
     """`musig2_psbt.Session` with the secret nonce on a card instead of in RAM."""
 
+    nonce_on_card = True
+
     def __init__(self, connector, sid: int):
         super().__init__()
         self._connector = connector

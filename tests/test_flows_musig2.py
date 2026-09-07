@@ -28,8 +28,10 @@ class TestMusig2Flows(FlowTest):
         self.seed = Seed(mnemonic=self.data["mnemonics"]["B"].split())
         self.controller.storage.seeds.append(self.seed)
 
-    def _walk(self, psbt_b64, tail):
+    def _walk(self, psbt_b64, tail, before_scan=None):
         def load_psbt(view: scan_views.ScanView):
+            if before_scan is not None:
+                before_scan()
             view.decoder.add_data(psbt_b64)
 
         return [
@@ -196,3 +198,83 @@ class TestMusig2Flows(FlowTest):
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
         assert type(self.controller.musig2_session) is musig2_psbt.Session
+
+    # --- a card that is already open is used without asking -----------------------
+    #
+    # Reaching the signing flow with an open SeedKeeper connector is an ordinary path,
+    # not a contrivance: loading a seed off a SeedKeeper and then picking "Scan
+    # transaction" from the seed's own menu never passes Home, and Home is the only
+    # place the smartcard session is wiped. Asking there would cost a second PIN for a
+    # question whose answer is already sitting in the reader.
+
+    def _open_card(self, root=None):
+        """Open a card the way the real path does: after Home, not before it.
+
+        Returning Home wipes the whole smartcard session unless Cache Smartcard Pin
+        is on, and it ships off. Opening the card before this walk starts would test
+        nothing, because Home would throw the connector away before the offer view
+        ever looked for it. That is not hypothetical: it is why silent selection was
+        withdrawn the first time, and the first draft of this test hit it.
+        """
+        from test_musig2_card import FakeCardWithSecrets
+        root = root or self.seed.get_root(SettingsConstants.REGTEST)
+
+        def open_it():
+            self.controller.Satochip_Connector = FakeCardWithSecrets(root, {1: root})
+
+        return open_it
+
+    def test_an_open_card_holding_this_seed_skips_the_offer(self):
+        self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView, is_redirect=True),
+            FlowStep(psbt_views.PSBTMusig2RoundView),
+            FlowStep(psbt_views.PSBTSignedQRDisplayView),
+        ], before_scan=self._open_card()))
+        assert self.controller.musig2_session.nonce_on_card is True
+
+    def test_an_open_card_holding_another_seed_still_asks(self):
+        """Wrong seed on the card means it cannot make the nonce, so the offer stands."""
+        from embit import bip32, bip39
+        stranger = bip32.HDKey.from_seed(bip39.mnemonic_to_seed(self.data["mnemonics"]["C"]))
+        self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView,
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.KEEP_DEVICE_ON),
+            FlowStep(psbt_views.PSBTMusig2RoundView),
+            FlowStep(psbt_views.PSBTSignedQRDisplayView),
+        ], before_scan=self._open_card(stranger)))
+        assert self.controller.musig2_session.nonce_on_card is False
+
+    def test_the_round_screen_says_where_the_nonce_is(self):
+        """The text differs by where the nonce ended up, because that decides
+        whether the user may power the device off before scanning this back."""
+        seen = []
+
+        def capture(view):
+            original = view.run_screen
+
+            def spy(screen_cls, **kwargs):
+                seen.append(kwargs.get("text", ""))
+                return original(screen_cls, **kwargs)
+
+            view.run_screen = spy
+
+        self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView, is_redirect=True),
+            FlowStep(psbt_views.PSBTMusig2RoundView, before_run=capture),
+            FlowStep(psbt_views.PSBTSignedQRDisplayView),
+        ], before_scan=self._open_card()))
+        assert len(seen) == 1
+        assert "your card is holding it" in seen[0].lower(), seen
+        assert "switch off" in seen[0].lower(), seen
+
+        seen.clear()
+        self.setup_method()
+        self.run_sequence(self._walk(self._without_other_nonces(), [
+            FlowStep(psbt_views.PSBTMusig2CardOfferView,
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.KEEP_DEVICE_ON),
+            FlowStep(psbt_views.PSBTMusig2RoundView, before_run=capture),
+            FlowStep(psbt_views.PSBTSignedQRDisplayView),
+        ]))
+        assert len(seen) == 1
+        assert "keep this device on" in seen[0].lower(), seen
+        assert "card" not in seen[0].lower(), seen

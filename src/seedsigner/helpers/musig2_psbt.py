@@ -477,6 +477,11 @@ class Session:
     `new_nonce` and `sign`; `advance` never touches the secret nonce itself.
     """
 
+    # Read by the round screen to say where the secret nonce ended up. A user who
+    # cannot see that cannot know whether powering off is safe, so the benefit is
+    # not one; that is the whole reason the card was made visible in the first place.
+    nonce_on_card = False
+
     def __init__(self):
         self._nonces: Dict[tuple, tuple] = {}   # key -> (secret nonce or handle, public nonce)
 
