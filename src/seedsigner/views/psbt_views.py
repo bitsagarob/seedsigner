@@ -1423,19 +1423,26 @@ class PSBTMusig2CardOfferView(View):
     """
         Offered once per signing, before the first round.
 
-        This kind of signing takes two steps, and something has to remember where you
-        got to. Memory forgets at power-off, so the device has to stay on; a card does
-        not, and it will only give that memory back once, which is what makes it safe
-        to hand around. The choice is here rather than in Settings because it is the
-        screen that tells the user they may put the device down, and a benefit nobody
-        is told about is not a benefit.
+        Signing is not always finished in one pass, and something has to remember where
+        you got to. Memory forgets at power-off, so the device has to stay on; a card
+        does not, and it will only give that memory back once, which is what makes it
+        safe to hand around. The choice is here rather than in Settings because it is
+        the screen that tells the user they may put the device down, and a benefit
+        nobody is told about is not a benefit.
+
+        Being able to switch off is the part that is true whatever else changes. The
+        pooled nonces a card leaves behind can make a later spend cost one pass instead
+        of two, but only once a coordinator picks one up, and never on the no-card path,
+        which mints one nonce per signing and pools nothing. So the screen says what the
+        card does and counts nothing.
     """
     # TRANSLATOR_NOTE: Keep this signing's half-finished state on the smartcard
     USE_CARD = ButtonOption("Use Card")
-    CONTINUE = ButtonOption("Continue")
+    # TRANSLATOR_NOTE: Decline the card and leave the device powered on until signing ends
+    KEEP_DEVICE_ON = ButtonOption("Keep Device On")
 
     def run(self):
-        button_data = [self.USE_CARD, self.CONTINUE]
+        button_data = [self.USE_CARD, self.KEEP_DEVICE_ON]
         # Not a WarningScreen. This is an offer of convenience, and that screen supplies
         # a "Caution" title and an amber alert icon, which read as a hazard warning about
         # the card rather than an invitation to use it. Dropping the icon also returns
@@ -1456,7 +1463,13 @@ class PSBTMusig2CardOfferView(View):
             # Body-coloured, not the green a status screen defaults to: nothing has
             # succeeded here, a question is being asked.
             status_color=GUIConstants.BODY_FONT_COLOR,
-            text=_("Your card holds your place, so this device need not stay on."),
+            # Says what the card does, not how many passes anything takes: that number
+            # differs between the card and no-card paths and changes as pooled nonces
+            # land. What each button costs you is on the button itself, so the body does
+            # not have to carry it. "Continue" used to be the second button, which is the
+            # generic proceed word everywhere else in the app and so did not read as the
+            # other half of a choice at all.
+            text=_("A card holds this signing so the device can be switched off."),
             show_back_button=True,
             button_data=button_data,
         )

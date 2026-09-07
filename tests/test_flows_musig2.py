@@ -61,7 +61,7 @@ class TestMusig2Flows(FlowTest):
         from seedsigner.helpers import musig2_psbt
         self.run_sequence(self._walk(self._without_other_nonces(), [
             FlowStep(psbt_views.PSBTMusig2CardOfferView,
-                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.CONTINUE),
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.KEEP_DEVICE_ON),
             FlowStep(psbt_views.PSBTMusig2RoundView),
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
@@ -74,7 +74,7 @@ class TestMusig2Flows(FlowTest):
         from seedsigner.helpers import musig2_psbt
         self.run_sequence(self._walk(self._without_other_nonces(), [
             FlowStep(psbt_views.PSBTMusig2CardOfferView,
-                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.CONTINUE),
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.KEEP_DEVICE_ON),
             FlowStep(psbt_views.PSBTMusig2RoundView),
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
@@ -96,7 +96,7 @@ class TestMusig2Flows(FlowTest):
         scope.unknown[key] = scope.unknown[key][:65]
         self.run_sequence(self._walk(psbt.to_string(), [
             FlowStep(psbt_views.PSBTMusig2CardOfferView,
-                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.CONTINUE),
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.KEEP_DEVICE_ON),
             FlowStep(psbt_views.PSBTMusig2RoundView, screen_return_value=0),
             FlowStep(MainMenuView),
         ]))
@@ -113,7 +113,7 @@ class TestMusig2Flows(FlowTest):
         # Framed as a coordinator sends it; the bare-base64 detector cannot read a v2 send
         self.run_sequence(self._walk("p1of1 " + silent_send(self.data, recipient).to_string(), [
             FlowStep(psbt_views.PSBTMusig2CardOfferView,
-                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.CONTINUE),
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.KEEP_DEVICE_ON),
             FlowStep(psbt_views.PSBTMusig2RoundView),
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
@@ -160,7 +160,7 @@ class TestMusig2Flows(FlowTest):
 
         self.run_sequence(self._walk(self._without_other_nonces(), [
             FlowStep(psbt_views.PSBTMusig2CardOfferView,
-                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.CONTINUE),
+                     button_data_selection=psbt_views.PSBTMusig2CardOfferView.KEEP_DEVICE_ON),
             FlowStep(psbt_views.PSBTMusig2RoundView),
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))

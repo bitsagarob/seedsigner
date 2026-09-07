@@ -56,10 +56,10 @@ class TestMusig2CardScreensFit(BaseTest):
                 status_icon_size=0,
                 status_headline="Card Signing",
                 status_color=GUIConstants.BODY_FONT_COLOR,
-                text="Your card holds your place, so this device need not stay on.",
+                text="A card holds this signing so the device can be switched off.",
                 show_back_button=True,
                 button_data=[PSBTMusig2CardOfferView.USE_CARD,
-                             PSBTMusig2CardOfferView.CONTINUE],
+                             PSBTMusig2CardOfferView.KEEP_DEVICE_ON],
             )
 
         self._no_overflow(caplog, "the card offer")
