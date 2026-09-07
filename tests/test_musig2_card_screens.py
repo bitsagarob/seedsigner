@@ -86,9 +86,10 @@ class TestMusig2CardScreensFit(BaseTest):
         from seedsigner.gui.screens.screen import LargeIconStatusScreen, ButtonOption
 
         for text in (
-            "Not signed yet. Send this back, then scan it again. Your card is "
-            "holding it, so you can switch off.",
-            "Not signed yet. Send this back, then scan it again. Keep this device on.",
+            "Not signed yet. Send this back, then scan it again. Your card "
+            "remembers this step, so you can switch off.",
+            "Not signed yet. Send this back, then scan it again. Switching off "
+            "would start over.",
         ):
             with caplog.at_level(logging.WARNING, logger="seedsigner.gui.components"):
                 LargeIconStatusScreen(

@@ -264,7 +264,7 @@ class TestMusig2Flows(FlowTest):
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ], before_scan=self._open_card()))
         assert len(seen) == 1
-        assert "your card is holding it" in seen[0].lower(), seen
+        assert "remembers this step" in seen[0].lower(), seen
         assert "switch off" in seen[0].lower(), seen
 
         seen.clear()
@@ -276,5 +276,5 @@ class TestMusig2Flows(FlowTest):
             FlowStep(psbt_views.PSBTSignedQRDisplayView),
         ]))
         assert len(seen) == 1
-        assert "keep this device on" in seen[0].lower(), seen
+        assert "would start over" in seen[0].lower(), seen
         assert "card" not in seen[0].lower(), seen

@@ -1575,14 +1575,26 @@ class PSBTMusig2RoundView(View):
         # Where the secret nonce is decides what the user may do next, so the screen
         # says it rather than a screen earlier in the flow having promised it. It only
         # matters while there is a gap to survive: once signed the nonce is spent.
+        # "This step" rather than a pronoun, and never the word nonce. The earlier
+        # wording ended "your card is holding it", where "it" had no antecedent on
+        # screen and so pointed back at the transaction the user had just been told to
+        # send: the sentence could be read as the card storing the transaction, which
+        # it does not. "Step" is on this same screen, in the headline above.
+        #
+        # Nothing here says the card finishes the signing either. It does not sign at
+        # all; the seed is on the device, and what the card supplies is somewhere to
+        # keep a secret that cannot be replayed.
         if self.controller.musig2_session.nonce_on_card:
-            # TRANSLATOR_NOTE: The smartcard is holding this signing's secret nonce
+            # TRANSLATOR_NOTE: The smartcard can resume this half-finished signing
             waiting = _("Not signed yet. Send this back, then scan it again. Your card "
-                        "is holding it, so you can switch off.")
+                        "remembers this step, so you can switch off.")
         else:
-            # TRANSLATOR_NOTE: The nonce is in memory, so powering off loses the signing
-            waiting = _("Not signed yet. Send this back, then scan it again. Keep this "
-                        "device on.")
+            # The consequence rather than an instruction: "keep this device on" said
+            # nothing about what ignoring it would cost, and this is the path where
+            # powering off really does destroy the work.
+            # TRANSLATOR_NOTE: Nothing is stored, so powering off loses this signing
+            waiting = _("Not signed yet. Send this back, then scan it again. Switching "
+                        "off would start over.")
 
         if progress.stage == musig2_psbt.SIGNED:
             step, text = steps, _("Signed. Send this back to finish.")
