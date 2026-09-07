@@ -4756,8 +4756,12 @@ class MultisigWalletDescriptorView(View):
 
         fingerprints = []
         for key in descriptor.keys:
-            fingerprint = hexlify(key.fingerprint).decode()
-            fingerprints.append(fingerprint)
+            # A musig() expression is several keys wearing one hat, and the same
+            # seed appears in more than one of them when there are fallback leaves.
+            for one in getattr(key, "keys", [key]):
+                fingerprint = hexlify(one.fingerprint).decode()
+                if fingerprint not in fingerprints:
+                    fingerprints.append(fingerprint)
 
         from seedsigner.helpers.embit_utils import get_multisig_policy
         if descriptor.is_basic_multisig:
