@@ -31,11 +31,15 @@ CORPUS_DIR = os.environ.get(
     "/home/rob/apps/bitsaga/services/silentpayments/dnssec-verify/testdata")
 
 def _corpus_present():
+    # The corpus check comes first on purpose: importing pydnssec_prover reaches ctypes, and on a
+    # host where that load aborts rather than raises there is no except that can save the run.
+    if not os.path.exists(os.path.join(CORPUS_DIR, "INDEX.json")):
+        return False
     try:
         import pydnssec_prover  # noqa: F401
     except ImportError:
         return False
-    return os.path.exists(os.path.join(CORPUS_DIR, "INDEX.json"))
+    return True
 
 
 pytestmark = pytest.mark.skipif(
@@ -48,7 +52,12 @@ def _index():
 
 
 def _bip353_manifest():
-    with open(os.path.join(CORPUS_DIR, "bip353", "manifest.json")) as f:
+    # Read at collection time by the parametrize below, which runs before any skip marker is
+    # consulted, so a missing corpus has to yield an empty case list rather than raise.
+    path = os.path.join(CORPUS_DIR, "bip353", "manifest.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
         return {c["slug"]: c for c in json.load(f)["cases"]}
 
 
