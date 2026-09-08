@@ -644,9 +644,11 @@ class PSBTParser():
         what the screen showed. That voids the review entirely, so it is a refusal
         rather than a warning.
 
-        embit does not parse this key into a named field (it lands in psbt.unknown),
-        so it must be inspected explicitly. Absent means final: BIP-370 treats a
-        missing TX_MODIFIABLE as 0x00, and the valid corpus vectors omit it.
+        Where the flags live depends on the embit build: newer ones parse key 0x06 into
+        `tx_modifiable_flags` and drop it from psbt.unknown, older ones leave it in
+        psbt.unknown untouched. Both are read, because a check that knows only one place
+        stops refusing anything the day the pin moves. Absent means final: BIP-370 treats
+        a missing TX_MODIFIABLE as 0x00, and the valid corpus vectors omit it.
 
         Only meaningful for v2 -- on a v0 psbt key 0x06 is just an unknown field with
         no modifiability semantics, so it must not trigger this refusal there.
@@ -654,13 +656,16 @@ class PSBTParser():
         if getattr(self.psbt, "version", None) != 2:
             return
 
-        value = self.psbt.unknown.get(b"\x06")
-        if value is None:
-            return
+        flags = getattr(self.psbt, "tx_modifiable_flags", None)
+        if flags is None:
+            value = self.psbt.unknown.get(b"\x06")
+            if value is None:
+                return
+            flags = int.from_bytes(value, "little")
 
         # The field is a single byte; the low two bits are the flags. Anything set
         # there means the transaction is not final.
-        if int.from_bytes(value, "little") & 0x03:
+        if flags & 0x03:
             raise InvalidPSBTError(
                 "Modifiable (TX_MODIFIABLE): inputs or outputs can change after you sign.",
                 code=RejectCode.TX_MODIFIABLE,

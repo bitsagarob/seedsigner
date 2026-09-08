@@ -546,11 +546,19 @@ class TestPSBTv2:
     # ------------------------------------------------- structural completeness
 
     def test_missing_output_amount_is_refused_not_crashed(self):
-        """A v2 output with no amount would otherwise die on `0 <= None`."""
+        """A v2 output with no amount would otherwise die on `0 <= None`.
+
+        Both layers are checked because each can refuse this alone. embit will not read
+        bytes that omit PSBT_OUT_AMOUNT, so an attacker's wire format stops there. The
+        parser's own bound is asserted against the doctored object directly, since that
+        is the check that has to hold the day embit's does not.
+        """
         psbt = self._v2()
         psbt.outputs[0].value = None
+        with pytest.raises(EmbitError):
+            self._reparse(psbt)
         with pytest.raises(InvalidPSBTError) as excinfo:
-            PSBTParser(p=self._reparse(psbt), seed=suite_seed(), network=SUITE_NETWORK)
+            PSBTParser(p=psbt, seed=suite_seed(), network=SUITE_NETWORK)
         assert excinfo.value.code == RejectCode.AMOUNT_OUT_OF_RANGE
 
     def test_empty_output_script_is_refused(self):
@@ -563,12 +571,18 @@ class TestPSBTv2:
         assert excinfo.value.code == RejectCode.UNDISPLAYABLE_OUTPUT
 
     def test_missing_input_prevout_is_refused(self):
-        """A v2 input must name the utxo it spends; a witness_utxo alone is not enough."""
+        """A v2 input must name the utxo it spends; a witness_utxo alone is not enough.
+
+        Same two layers as the missing-amount case above: embit refuses the bytes, and
+        the parser refuses the object.
+        """
         psbt = self._v2()
         psbt.inputs[0].txid = None
         psbt.inputs[0].vout = None
+        with pytest.raises(EmbitError):
+            self._reparse(psbt)
         with pytest.raises(InvalidPSBTError) as excinfo:
-            PSBTParser(p=self._reparse(psbt), seed=suite_seed(), network=SUITE_NETWORK)
+            PSBTParser(p=psbt, seed=suite_seed(), network=SUITE_NETWORK)
         assert excinfo.value.code == RejectCode.MISSING_UTXO
 
     # ------------------------------------------------- parse and sign end-to-end

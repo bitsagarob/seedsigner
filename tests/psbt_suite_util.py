@@ -371,13 +371,14 @@ VECTORS = [
         "XTRAS.NEGATIVE_AMOUNT", "extras",
         "Output value 0xFFFFFFFFFFFFFFFF — far beyond MAX_MONEY. Must never reach "
         "the display as a real amount.",
-        Expect.REJECT_PARSER,
+        Expect.REJECT_EMBIT,
         input_amount=200_000, output_amount=18446744073709651615, num_outputs=2,
-        # This vector is a spec-valid BIP-370 v2 psbt (version 2), so it now passes
-        # the version gate and is refused at the amount bound instead: an output past
-        # MAX_MONEY cannot be displayed or signed. See _assert_v2_complete, which
-        # catches it before any value is trusted for display.
-        reject_code=RejectCode.AMOUNT_OUT_OF_RANGE,
+        # This vector is a spec-valid BIP-370 v2 psbt, and PSBTParser used to be the
+        # layer that refused it, at the amount bound in _assert_v2_complete. embit now
+        # refuses PSBT_OUT_AMOUNT above MAX_MONEY while reading the bytes, so the psbt
+        # object never gets built and the parser never sees it. Refused either way, one
+        # layer earlier; _assert_v2_complete's own bound is exercised directly by
+        # TestPSBTv2.test_missing_output_amount_is_refused_not_crashed.
     ),
     Vector(
         "XTRAS.NEGATIVE_FEE", "extras",
