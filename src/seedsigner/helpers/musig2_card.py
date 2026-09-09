@@ -276,16 +276,23 @@ def for_seed(connector, root) -> Optional[CardSession]:
         return None
 
     wanted = root.my_fingerprint
+    logger.info("musig2: card holds %d secrets, want fingerprint %s",
+                len(headers), wanted.hex())
     for header in headers:
+        logger.info("musig2: secret id=%s type=%s", header.get("id"), header.get("type"))
         if header.get("type") not in SEED_BEARING_TYPES:
             continue
         sid = header["id"]
         try:
             pubkey, _ = connector.card_bip32_get_extendedkey("m", sid=sid)
-        except Exception:
+        except Exception as why:
+            logger.info("musig2: secret %s would not derive: %s", sid, why)
             continue
+        logger.info("musig2: secret %s derives fingerprint %s",
+                    sid, _fingerprint(pubkey).hex())
         if _fingerprint(pubkey) == wanted:
             return CardSession(connector, sid)
+    logger.info("musig2: no secret on this card matches the seed")
     return None
 
 
