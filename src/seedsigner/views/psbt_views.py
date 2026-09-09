@@ -1281,6 +1281,19 @@ class PSBTFinalizeView(View):
         if not self.controller.psbt_sign_with_satochip:
             from seedsigner.helpers import musig2_psbt
             if musig2_psbt.has_musig2_fields(psbt):
+                # A card session belongs to the seed it was opened for. Signing
+                # goes round once per cosigner and the controller carries the
+                # session between them, so the second cosigner inherited the
+                # first one's card: its nonce came off a card that had never
+                # seen this key, and BIP-327 refused it at the last step with
+                # "Public key does not match nonce_gen argument". Only visible
+                # once the smartcard session outlives a trip Home, which is why
+                # it took this long to show up.
+                held = self.controller.musig2_session
+                if held is not None and hasattr(held, "holds"):
+                    if not held.holds(self.controller.psbt_parser.root):
+                        held.clear()
+                        self.controller.musig2_session = None
                 # The offer is only worth making to someone who has smartcards turned
                 # on at all, and only before the first round: once a session exists the
                 # question has been asked and answered.

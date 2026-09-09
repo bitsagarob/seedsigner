@@ -142,10 +142,20 @@ class CardSession(mp.Session):
 
     nonce_on_card = True
 
-    def __init__(self, connector, sid: int):
+    def __init__(self, connector, sid: int, fingerprint: bytes = b""):
         super().__init__()
         self._connector = connector
         self._sid = sid
+        # Which seed this card is holding nonces for. A session outlives one
+        # round and the controller carries it between them, so a signing that
+        # picks a different cosigner must not inherit it: the nonce would come
+        # off the wrong card and the signature would be made with a key the
+        # nonce was never generated for.
+        self.fingerprint = fingerprint
+
+    def holds(self, root) -> bool:
+        """Is this session the one for this seed?"""
+        return bool(self.fingerprint) and self.fingerprint == root.my_fingerprint
 
     def __bool__(self) -> bool:
         """A session exists whether or not it is holding a nonce yet.
@@ -291,7 +301,7 @@ def for_seed(connector, root) -> Optional[CardSession]:
         logger.info("musig2: secret %s derives fingerprint %s",
                     sid, _fingerprint(pubkey).hex())
         if _fingerprint(pubkey) == wanted:
-            return CardSession(connector, sid)
+            return CardSession(connector, sid, wanted)
     logger.info("musig2: no secret on this card matches the seed")
     return None
 
