@@ -61,6 +61,14 @@ SIZE_SECNONCE = 97
 # from pysatochip because the test suite replaces that package with a mock, and because
 # it is a wire value that cannot move without breaking every card already in the field.
 SECRET_TYPE_MASTERSEED = 0x10
+# A seed saved from this device lands as a BIP39 mnemonic, not a masterseed, so
+# looking only for the latter found nothing on a card this device had written
+# itself: signing fell back to memory without a word and left no spare nonces,
+# which is the whole of the pool. Both mnemonic types are here because the
+# applet has two, and which one a card holds depends on when it was written.
+SECRET_TYPE_BIP39 = 0x30
+SECRET_TYPE_BIP39_V2 = 0x31
+SEED_BEARING_TYPES = (SECRET_TYPE_MASTERSEED, SECRET_TYPE_BIP39, SECRET_TYPE_BIP39_V2)
 
 INS_MUSIG2_GENERATE_NONCE = 0x7E
 INS_MUSIG2_UNSEAL_NONCE = 0x7F
@@ -254,6 +262,12 @@ def for_seed(connector, root) -> Optional[CardSession]:
     any other route than this card has no counterpart here. Rather than track which
     secret a seed came from, ask the card what it is holding and compare fingerprints,
     which needs no state and is right even if the seed was loaded in an earlier session.
+
+    Every kind of secret a seed can be stored as is considered, not masterseeds
+    alone: this device saves a seed as a BIP39 mnemonic, so a card it had
+    written itself was being passed over. A secret the card cannot derive from
+    raises and is skipped, which is what the fingerprint comparison would have
+    done with it anyway.
     """
     try:
         headers = connector.seedkeeper_list_secret_headers()
@@ -263,7 +277,7 @@ def for_seed(connector, root) -> Optional[CardSession]:
 
     wanted = root.my_fingerprint
     for header in headers:
-        if header.get("type") != SECRET_TYPE_MASTERSEED:
+        if header.get("type") not in SEED_BEARING_TYPES:
             continue
         sid = header["id"]
         try:
